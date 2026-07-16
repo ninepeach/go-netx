@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/ninepeach/netx/tcp"
+	"github.com/ninepeach/go-netx/tcp"
 )
 
 func main() {

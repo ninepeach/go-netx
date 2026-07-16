@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/ninepeach/netx"
+	"github.com/ninepeach/go-netx"
 )
 
 func main() {

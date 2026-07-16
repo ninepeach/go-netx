@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ninepeach/netx/mux"
+	"github.com/ninepeach/go-netx/mux"
 )
 
 type testStream struct {

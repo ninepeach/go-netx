@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ninepeach/netx/tcp"
-	"github.com/ninepeach/netx/udp"
+	"github.com/ninepeach/go-netx/tcp"
+	"github.com/ninepeach/go-netx/udp"
 )
 
 func TestTCPServerAndClientsCommunicate(t *testing.T) {

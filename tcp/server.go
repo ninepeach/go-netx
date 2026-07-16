@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ninepeach/netx/socket"
+	"github.com/ninepeach/go-netx/socket"
 )
 
 var ErrServerClosed = errors.New("tcp: server closed")

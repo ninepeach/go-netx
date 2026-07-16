@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/ninepeach/netx/socket"
+	"github.com/ninepeach/go-netx/socket"
 )
 
 type Dialer struct{ inner net.Dialer }

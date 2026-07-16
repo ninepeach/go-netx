@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ninepeach/netx/udp"
+	"github.com/ninepeach/go-netx/udp"
 )
 
 func TestServerEcho(t *testing.T) {

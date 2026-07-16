@@ -16,7 +16,7 @@ import (
 	"log"
 	"net"
 
-	"github.com/ninepeach/netx"
+	"github.com/ninepeach/go-netx"
 )
 
 func main() {

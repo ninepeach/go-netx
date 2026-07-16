@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/ninepeach/netx/socket"
+	"github.com/ninepeach/go-netx/socket"
 )
 
 func TestListenConfigWithoutOptions(t *testing.T) {

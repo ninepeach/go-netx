@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ninepeach/netx"
+	"github.com/ninepeach/go-netx"
 )
 
 type blockingService struct {

@@ -5,8 +5,8 @@ import (
 	"io"
 	"net"
 
-	"github.com/ninepeach/netx/tcp"
-	"github.com/ninepeach/netx/udp"
+	"github.com/ninepeach/go-netx/tcp"
+	"github.com/ninepeach/go-netx/udp"
 )
 
 func Example_tcpServer() {

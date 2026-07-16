@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ninepeach/netx/tcp"
+	"github.com/ninepeach/go-netx/tcp"
 )
 
 func TestServerEchoAndShutdown(t *testing.T) {

@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ninepeach/netx/socket"
-	"github.com/ninepeach/netx/tcp"
-	"github.com/ninepeach/netx/udp"
+	"github.com/ninepeach/go-netx/socket"
+	"github.com/ninepeach/go-netx/tcp"
+	"github.com/ninepeach/go-netx/udp"
 )
 
 // TCPHandler handles one accepted TCP connection. The server owns conn and

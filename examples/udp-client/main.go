@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/ninepeach/netx/udp"
+	"github.com/ninepeach/go-netx/udp"
 )
 
 func main() {
