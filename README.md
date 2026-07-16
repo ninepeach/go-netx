@@ -5,18 +5,42 @@ handling and graceful shutdown.
 
 ## TCP server
 
+Copy this complete example to `main.go`:
+
 ```go
-s := netx.NewTCPServer(":9000")
+package main
 
-s.OnConnect = func(_ context.Context, conn net.Conn) error {
-	_, err := io.Copy(conn, conn)
-	return err
-}
+import (
+	"context"
+	"io"
+	"log"
+	"net"
 
-if err := s.Loop(); err != nil {
-	log.Fatal(err)
+	"github.com/ninepeach/netx"
+)
+
+func main() {
+	s := netx.NewTCPServer(":9000")
+
+	s.OnConnect = func(_ context.Context, conn net.Conn) error {
+		_, err := io.Copy(conn, conn)
+		return err
+	}
+
+	s.OnStart = func(context.Context) error {
+		log.Printf("TCP echo listening on %s", s.Addr())
+		return nil
+	}
+
+	if err := s.Loop(); err != nil {
+		log.Fatal(err)
+	}
 }
 ```
+
+Run it with `go run main.go`, then connect with `nc 127.0.0.1 9000`.
+Everything typed into `nc` is echoed back. Press `Ctrl-C` in the server
+terminal for graceful shutdown.
 
 `Loop()` listens for `SIGINT` and `SIGTERM`, closes the listener, and waits for
 active connections. The server owns each accepted connection and closes it
