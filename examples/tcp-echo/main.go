@@ -14,12 +14,15 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	log.Printf("TCP echo listening on :9000")
-	err := netx.ListenAndServeTCP(ctx, ":9000", func(_ context.Context, conn net.Conn) error {
+	tcpService, err := netx.NewTCPServer(ctx, ":9000", func(_ context.Context, conn net.Conn) error {
 		_, err := io.Copy(conn, conn)
 		return err
-	})
+	}, netx.TCPServerOptions{})
 	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("TCP echo listening on %s", tcpService.Addr())
+	if err := netx.NewServer(tcpService).LoopContext(ctx); err != nil {
 		log.Fatal(err)
 	}
 }

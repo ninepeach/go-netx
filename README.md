@@ -1,149 +1,162 @@
 # netx
 
-`netx` provides a reusable service lifecycle, high-level TCP/UDP servers, and
-lower-level networking packages for applications that need complete control.
+`netx` is a reusable Go server runtime. It manages startup, serving, operating
+system signals, errors, and graceful shutdown while leaving protocol and domain
+behavior to the caller.
 
-## Service lifecycle
+## Quick start
 
-`netx.Server` manages startup, serving, signals, errors, and graceful shutdown.
-Override only the functions needed by the service:
+Override the lifecycle functions and start the loop:
 
 ```go
 s := netx.NewServer()
 s.OnServe = serve
 s.OnShutdown = shutdown
-return s.Loop()
+
+if err := s.Loop(); err != nil {
+	log.Fatal(err)
+}
 ```
 
-The callback signatures are:
+The callbacks receive a context:
 
 ```go
-func serve(context.Context) error
-func shutdown(context.Context) error
+func serve(ctx context.Context) error
+func shutdown(ctx context.Context) error
 ```
 
-For reusable implementations, satisfy the native lifecycle interface:
+`Loop()` listens for `SIGINT` and `SIGTERM`. Use `LoopContext(ctx)` when the
+parent process already controls cancellation.
+
+## Service interface
+
+Reusable services implement two methods:
 
 ```go
 type Service interface {
 	Serve(context.Context) error
 	Shutdown(context.Context) error
 }
+```
 
+Starting one requires two lines:
+
+```go
 s := netx.NewServer(service)
+return s.Loop()
+```
+
+Optional hooks can extend the lifecycle without changing the service:
+
+```go
+s := netx.NewServer(service)
+
 s.OnStart = func(context.Context) error {
-	log.Print("service started")
+	log.Print("started")
 	return nil
 }
 s.OnStop = func(context.Context) error {
-	log.Print("service stopped")
+	log.Print("stopped")
 	return nil
 }
+s.OnError = func(err error) {
+	log.Printf("server: %v", err)
+}
+
 return s.Loop()
 ```
 
-Use `LoopContext(ctx)` when a parent application already manages signals. A
-Server is one-shot and follows `new → starting → running → stopping → stopped`.
-The default graceful shutdown timeout is 30 seconds.
+## Existing functions
 
-Existing functions can also use an adapter:
+`ServiceFuncs` adapts existing functions without requiring a new type:
 
 ```go
 s := netx.NewServer(netx.ServiceFuncs{
-	ServeFunc: serve,
+	ServeFunc:    serve,
 	ShutdownFunc: shutdown,
 })
+
 return s.Loop()
 ```
 
-## Network servers
+## TCP service
 
-The lifecycle API is independent of protocol implementations. The following
-helpers remain available for small standalone TCP and UDP servers.
-
-### TCP server: one call
+The TCP package handles listening, connection ownership, concurrency limits,
+and active connection shutdown. `tcp.Server` implements `netx.Service`.
 
 ```go
-package main
-
-import (
-	"context"
-	"io"
-	"net"
-
-	"github.com/ninepeach/netx"
-)
-
-func main() {
-	_ = netx.ListenAndServeTCP(context.Background(), ":9000",
-		func(_ context.Context, conn net.Conn) error {
-			_, err := io.Copy(conn, conn)
-			return err
-		})
-}
-```
-
-The high-level server automatically handles listening, the accept loop,
-connection ownership, handler goroutines, cancellation, and graceful shutdown.
-
-### UDP server: request in, response out
-
-```go
-package main
-
-import (
-	"context"
-
-	"github.com/ninepeach/netx"
-)
-
-func main() {
-	_ = netx.ListenAndServeUDP(context.Background(), ":9001",
-		func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
-			return request.Payload, nil
-		})
-}
-```
-
-Returning `nil, nil` processes a datagram without sending a response.
-
-### Production options
-
-```go
-err := netx.ListenAndServeTCP(ctx, ":9000", handler,
+tcpService, err := netx.NewTCPServer(
+	context.Background(),
+	":9000",
+	func(_ context.Context, conn net.Conn) error {
+		_, err := io.Copy(conn, conn)
+		return err
+	},
 	netx.TCPServerOptions{
-		MaxConnections:  4096,
-		ShutdownTimeout: 10 * time.Second,
-		OnError:         func(err error) { log.Printf("connection: %v", err) },
-		Socket: socket.Options{
-			FastOpen: socket.FastOpenOptions{
-				Enabled:     true,
-				Backlog:     256,
-				Unsupported: socket.UnsupportedError,
-			},
+		MaxConnections: 4096,
+	},
+)
+if err != nil {
+	return err
+}
+
+return netx.NewServer(tcpService).Loop()
+```
+
+TCP Fast Open can be enabled through socket options:
+
+```go
+netx.TCPServerOptions{
+	Socket: socket.Options{
+		FastOpen: socket.FastOpenOptions{
+			Enabled:     true,
+			Backlog:     256,
+			Unsupported: socket.UnsupportedError,
 		},
-	})
+	},
+}
 ```
 
 Linux supports TCP Fast Open for listeners and outbound sockets. Other
 platforms can return `socket.UnsupportedOptionError` or ignore the feature,
-depending on `Unsupported` policy.
+depending on the selected policy.
 
-### Start first, serve separately
+## UDP service
 
-Use the constructors when the application needs the bound address or controls
-its own goroutines:
+`udp.Server` also implements `netx.Service`. A handler returns the response
+datagram; returning `nil, nil` sends nothing.
 
 ```go
-server, err := netx.NewTCPServer(ctx, "127.0.0.1:0", handler, options)
-if err != nil { return err }
-log.Printf("listening on %s", server.Addr())
-return server.Serve(ctx)
+udpService, err := netx.NewUDPServer(
+	":9001",
+	func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
+		return request.Payload, nil
+	},
+	netx.UDPServerOptions{MaxHandlers: 256},
+)
+if err != nil {
+	return err
+}
+
+return netx.NewServer(udpService).Loop()
 ```
 
-Equivalent `NewUDPServer` is available for UDP.
+## Lifecycle behavior
 
-## Client examples
+A `Server` is one-shot and follows:
+
+```text
+new → starting → running → stopping → stopped
+```
+
+- The default graceful shutdown timeout is 30 seconds.
+- `Stop()` requests asynchronous cancellation.
+- `Shutdown(ctx)` requests cancellation and waits for completion.
+- Serve and shutdown errors are preserved with `errors.Join`.
+- Hook panics are converted to errors.
+- Calling `Loop` more than once returns `ErrAlreadyRunning`.
+
+## Examples
 
 Run a server:
 
@@ -159,26 +172,21 @@ go run ./examples/tcp-client "hello TCP"
 go run ./examples/udp-client "hello UDP"
 ```
 
-## Advanced packages
+## Packages
 
-- `tcp`: listener lifecycle, connection ownership, limits, and dialer.
+- `netx`: service lifecycle and high-level TCP/UDP constructors.
+- `tcp`: TCP listener, connection lifecycle, limits, and dialer.
 - `udp`: packet server, bounded handlers, response writer, and client.
 - `socket`: socket configuration and Linux TCP Fast Open.
 - `mux`: implementation-neutral session and stream contracts.
 
-Protocol parsing, authentication, routing, and other domain behavior
-intentionally remain above the server layer.
-
 ## Verification
-
-The integration suite starts real loopback servers and verifies concurrent TCP
-clients, repeated messages, UDP request/response, cancellation, and shutdown.
 
 ```sh
 make test
 make race
 make vet
 
-# Communication-focused suite
+# Communication-focused tests
 go test -race ./integration ./tcp ./udp
 ```
