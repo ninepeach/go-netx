@@ -30,6 +30,21 @@ go run ./examples/tcp-echo
 go run ./examples/udp-echo
 ```
 
+Run the matching client in another terminal:
+
+```sh
+go run ./examples/tcp-client "hello TCP"
+go run ./examples/udp-client "hello UDP"
+```
+
+The integration suite starts real loopback servers and verifies multiple TCP
+clients, repeated stream messages, UDP request/response exchanges, cancellation,
+shutdown, and concurrent handler execution:
+
+```sh
+go test -race ./integration ./tcp ./udp
+```
+
 The `mux` package intentionally defines contracts rather than a wire protocol.
 Adapters for yamux, smux, QUIC, or a Ferry-specific protocol can implement the
 interfaces without coupling the core server to one framing format.

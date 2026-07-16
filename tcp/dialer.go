@@ -25,3 +25,9 @@ func NewDialer(opts DialOptions) *Dialer {
 func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	return d.inner.DialContext(ctx, network, address)
 }
+
+// Dial connects with a default Dialer. It is a convenience for applications
+// that do not need custom timeouts or socket options.
+func Dial(ctx context.Context, network, address string) (net.Conn, error) {
+	return NewDialer(DialOptions{}).DialContext(ctx, network, address)
+}
