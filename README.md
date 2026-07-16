@@ -1,58 +1,60 @@
 # netx
 
-`netx` is a reusable Go server runtime. It manages startup, serving, operating
-system signals, errors, and graceful shutdown while leaving protocol and domain
-behavior to the caller.
+`netx` provides small, overridable TCP and UDP servers with built-in signal
+handling and graceful shutdown.
 
-## Quick start
-
-Override the lifecycle functions and start the loop:
+## TCP server
 
 ```go
-s := netx.NewServer()
-s.OnServe = serve
-s.OnShutdown = shutdown
+s := netx.NewTCPServer(":9000")
+
+s.OnConnect = func(_ context.Context, conn net.Conn) error {
+	_, err := io.Copy(conn, conn)
+	return err
+}
 
 if err := s.Loop(); err != nil {
 	log.Fatal(err)
 }
 ```
 
-The callbacks receive a context:
+`Loop()` listens for `SIGINT` and `SIGTERM`, closes the listener, and waits for
+active connections. The server owns each accepted connection and closes it
+after `OnConnect` returns.
+
+Options are passed to the constructor:
 
 ```go
-func serve(ctx context.Context) error
-func shutdown(ctx context.Context) error
+s := netx.NewTCPServer(":9000", netx.TCPServerOptions{
+	MaxConnections:  4096,
+	ShutdownTimeout: 10 * time.Second,
+})
 ```
 
-`Loop()` listens for `SIGINT` and `SIGTERM`. Use `LoopContext(ctx)` when the
-parent process already controls cancellation.
-
-## Service interface
-
-Reusable services implement two methods:
+## UDP server
 
 ```go
-type Service interface {
-	Serve(context.Context) error
-	Shutdown(context.Context) error
+s := netx.NewUDPServer(":9001")
+
+s.OnPacket = func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
+	return request.Payload, nil
+}
+
+if err := s.Loop(); err != nil {
+	log.Fatal(err)
 }
 ```
 
-Starting one requires two lines:
+The returned bytes are sent to the packet source. Return `nil, nil` to send no
+response. Use `UDPServerOptions.MaxHandlers` to limit concurrent handlers.
+
+## Lifecycle hooks
+
+TCP and UDP servers expose the same lifecycle hooks:
 
 ```go
-s := netx.NewServer(service)
-return s.Loop()
-```
-
-Optional hooks can extend the lifecycle without changing the service:
-
-```go
-s := netx.NewServer(service)
-
 s.OnStart = func(context.Context) error {
-	log.Print("started")
+	log.Printf("listening on %s", s.Addr())
 	return nil
 }
 s.OnStop = func(context.Context) error {
@@ -62,43 +64,43 @@ s.OnStop = func(context.Context) error {
 s.OnError = func(err error) {
 	log.Printf("server: %v", err)
 }
-
-return s.Loop()
 ```
 
-## Existing functions
+- `Loop()` manages `SIGINT` and `SIGTERM`.
+- `LoopContext(ctx)` uses caller-provided cancellation.
+- `Stop()` requests asynchronous cancellation.
+- `Shutdown(ctx)` cancels and waits for completion.
+- `Ready()` is closed after network binding succeeds or fails.
+- `Addr()` returns the bound address after `Ready()`.
 
-`ServiceFuncs` adapts existing functions without requiring a new type:
+A server is one-shot: `new → starting → running → stopping → stopped`.
+
+## Generic services
+
+Non-network services can use the same lifecycle runtime:
 
 ```go
-s := netx.NewServer(netx.ServiceFuncs{
-	ServeFunc:    serve,
-	ShutdownFunc: shutdown,
-})
+type Service interface {
+	Serve(context.Context) error
+	Shutdown(context.Context) error
+}
 
+return netx.NewServer(service).Loop()
+```
+
+Functions can be assigned directly:
+
+```go
+s := netx.NewServer()
+s.OnServe = serve
+s.OnShutdown = shutdown
 return s.Loop()
 ```
 
-## TCP service
-
-The TCP server exposes overridable functions directly:
+## TCP Fast Open
 
 ```go
 s := netx.NewTCPServer(":9000", netx.TCPServerOptions{
-	MaxConnections: 4096,
-})
-s.OnConnect = func(_ context.Context, conn net.Conn) error {
-	_, err := io.Copy(conn, conn)
-	return err
-}
-
-return s.Loop()
-```
-
-TCP Fast Open can be enabled through socket options:
-
-```go
-netx.TCPServerOptions{
 	Socket: socket.Options{
 		FastOpen: socket.FastOpenOptions{
 			Enabled:     true,
@@ -106,67 +108,37 @@ netx.TCPServerOptions{
 			Unsupported: socket.UnsupportedError,
 		},
 	},
-}
-```
-
-Linux supports TCP Fast Open for listeners and outbound sockets. Other
-platforms can return `socket.UnsupportedOptionError` or ignore the feature,
-depending on the selected policy.
-
-## UDP service
-
-The UDP server follows the same object model. `OnPacket` returns the response
-datagram; returning `nil, nil` sends nothing.
-
-```go
-s := netx.NewUDPServer(":9001", netx.UDPServerOptions{
-	MaxHandlers: 256,
 })
-s.OnPacket = func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
-	return request.Payload, nil
-}
-
-return s.Loop()
 ```
 
-## Lifecycle behavior
+TCP Fast Open is implemented on Linux. Other platforms return an unsupported
+option error or ignore it according to the selected policy.
 
-A `Server` is one-shot and follows:
+## Echo examples
 
-```text
-new → starting → running → stopping → stopped
-```
-
-- The default graceful shutdown timeout is 30 seconds.
-- `Stop()` requests asynchronous cancellation.
-- `Shutdown(ctx)` requests cancellation and waits for completion.
-- Serve and shutdown errors are preserved with `errors.Join`.
-- Hook panics are converted to errors.
-- Calling `Loop` more than once returns `ErrAlreadyRunning`.
-
-## Examples
-
-Run a server:
+Start a server:
 
 ```sh
 go run ./examples/tcp-echo
+# or
 go run ./examples/udp-echo
 ```
 
-Run the matching client in another terminal:
+From another terminal:
 
 ```sh
 go run ./examples/tcp-client "hello TCP"
+# or
 go run ./examples/udp-client "hello UDP"
 ```
 
 ## Packages
 
-- `netx`: service lifecycle and overridable TCP/UDP servers.
+- `netx`: overridable servers and service lifecycle.
 - `tcp`: TCP listener, connection lifecycle, limits, and dialer.
-- `udp`: packet server, bounded handlers, response writer, and client.
-- `socket`: socket configuration and Linux TCP Fast Open.
-- `mux`: implementation-neutral session and stream contracts.
+- `udp`: packet server, response writer, and client.
+- `socket`: socket options and Linux TCP Fast Open.
+- `mux`: session and stream contracts.
 
 ## Verification
 
@@ -174,7 +146,4 @@ go run ./examples/udp-client "hello UDP"
 make test
 make race
 make vet
-
-# Communication-focused tests
-go test -race ./integration ./tcp ./udp
 ```
