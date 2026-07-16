@@ -8,21 +8,18 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/ninepeach/netx/tcp"
+	"github.com/ninepeach/netx"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	srv, err := tcp.Listen(ctx, "tcp", ":9000", tcp.HandlerFunc(func(_ context.Context, conn net.Conn) error {
+	log.Printf("TCP echo listening on :9000")
+	err := netx.ListenAndServeTCP(ctx, ":9000", func(_ context.Context, conn net.Conn) error {
 		_, err := io.Copy(conn, conn)
 		return err
-	}), tcp.ListenOptions{})
+	})
 	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("TCP echo listening on %s", srv.Addr())
-	if err := srv.Serve(ctx); err != nil {
 		log.Fatal(err)
 	}
 }

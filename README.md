@@ -1,29 +1,93 @@
 # netx
 
-Reusable Go networking primitives for TCP/UDP services and multiplexed streams.
+`netx` provides high-level TCP and UDP servers with safe lifecycle management,
+plus lower-level packages for applications that need complete control.
+
+## TCP server: one call
 
 ```go
-srv, err := tcp.Listen(ctx, "tcp", ":9000", tcp.HandlerFunc(handler), tcp.ListenOptions{})
-if err != nil { return err }
-return srv.Serve(ctx)
+package main
+
+import (
+	"context"
+	"io"
+	"net"
+
+	"github.com/ninepeach/netx"
+)
+
+func main() {
+	_ = netx.ListenAndServeTCP(context.Background(), ":9000",
+		func(_ context.Context, conn net.Conn) error {
+			_, err := io.Copy(conn, conn)
+			return err
+		})
+}
 ```
 
-The server owns accepted TCP connections and closes each connection after its
-handler returns. Protocol parsing, authentication, routing, and proxy behavior
-belong in the handler.
+The high-level server automatically handles listening, the accept loop,
+connection ownership, handler goroutines, cancellation, and graceful shutdown.
 
-TCP Fast Open is currently implemented on Linux. Other platforms either return
-`socket.UnsupportedOptionError` or ignore the option according to the selected
-policy.
+## UDP server: request in, response out
 
-## Packages
+```go
+package main
 
-- `tcp`: listener lifecycle, connection ownership, limits, and outbound dialer.
-- `udp`: packet loop, bounded handler concurrency, and response writer.
-- `socket`: portable socket configuration and Linux TCP Fast Open support.
-- `mux`: implementation-neutral session and stream contracts.
+import (
+	"context"
 
-## Examples
+	"github.com/ninepeach/netx"
+)
+
+func main() {
+	_ = netx.ListenAndServeUDP(context.Background(), ":9001",
+		func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
+			return request.Payload, nil
+		})
+}
+```
+
+Returning `nil, nil` processes a datagram without sending a response.
+
+## Production options
+
+```go
+err := netx.ListenAndServeTCP(ctx, ":9000", handler,
+	netx.TCPServerOptions{
+		MaxConnections:  4096,
+		ShutdownTimeout: 10 * time.Second,
+		OnError:         func(err error) { log.Printf("connection: %v", err) },
+		Socket: socket.Options{
+			FastOpen: socket.FastOpenOptions{
+				Enabled:     true,
+				Backlog:     256,
+				Unsupported: socket.UnsupportedError,
+			},
+		},
+	})
+```
+
+Linux supports TCP Fast Open for listeners and outbound sockets. Other
+platforms can return `socket.UnsupportedOptionError` or ignore the feature,
+depending on `Unsupported` policy.
+
+## Start first, serve separately
+
+Use the constructors when the application needs the bound address or controls
+its own goroutines:
+
+```go
+server, err := netx.NewTCPServer(ctx, "127.0.0.1:0", handler, options)
+if err != nil { return err }
+log.Printf("listening on %s", server.Addr())
+return server.Serve(ctx)
+```
+
+Equivalent `NewUDPServer` is available for UDP.
+
+## Client examples
+
+Run a server:
 
 ```sh
 go run ./examples/tcp-echo
@@ -37,22 +101,26 @@ go run ./examples/tcp-client "hello TCP"
 go run ./examples/udp-client "hello UDP"
 ```
 
-The integration suite starts real loopback servers and verifies multiple TCP
-clients, repeated stream messages, UDP request/response exchanges, cancellation,
-shutdown, and concurrent handler execution:
+## Advanced packages
 
-```sh
-go test -race ./integration ./tcp ./udp
-```
+- `tcp`: listener lifecycle, connection ownership, limits, and dialer.
+- `udp`: packet server, bounded handlers, response writer, and client.
+- `socket`: socket configuration and Linux TCP Fast Open.
+- `mux`: implementation-neutral session and stream contracts.
 
-The `mux` package intentionally defines contracts rather than a wire protocol.
-Adapters for yamux, smux, QUIC, or a Ferry-specific protocol can implement the
-interfaces without coupling the core server to one framing format.
+Protocol parsing, authentication, routing, and proxy semantics intentionally
+remain above the server layer.
 
 ## Verification
+
+The integration suite starts real loopback servers and verifies concurrent TCP
+clients, repeated messages, UDP request/response, cancellation, and shutdown.
 
 ```sh
 make test
 make race
 make vet
+
+# Communication-focused suite
+go test -race ./integration ./tcp ./udp
 ```
