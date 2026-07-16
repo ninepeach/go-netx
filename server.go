@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/ninepeach/netx/socket"
@@ -24,9 +25,9 @@ type TCPServerOptions struct {
 	OnError         func(error)
 }
 
-// NewTCPServer binds address and returns a server ready to Serve. Most callers
-// can use ListenAndServeTCP instead.
-func NewTCPServer(ctx context.Context, address string, handler TCPHandler, opts TCPServerOptions) (*tcp.Server, error) {
+// NewTCPService binds address and returns the lower-level TCP service. Most
+// applications should use NewTCPServer.
+func NewTCPService(ctx context.Context, address string, handler TCPHandler, opts TCPServerOptions) (*tcp.Server, error) {
 	if handler == nil {
 		return nil, errors.New("netx: nil TCP handler")
 	}
@@ -40,6 +41,73 @@ func NewTCPServer(ctx context.Context, address string, handler TCPHandler, opts 
 	})
 }
 
+// TCPServer is a high-level, overridable TCP server.
+type TCPServer struct {
+	*Server
+	Address   string
+	Options   TCPServerOptions
+	OnConnect TCPHandler
+
+	prepareOnce sync.Once
+	prepareErr  error
+	service     *tcp.Server
+	ready       chan struct{}
+}
+
+// NewTCPServer creates a TCP server. Set OnConnect, then call Loop or
+// LoopContext. Network binding is delayed until the loop starts.
+func NewTCPServer(address string, options ...TCPServerOptions) *TCPServer {
+	config, err := oneTCPOptions(options)
+	runtime := NewServer()
+	runtime.ShutdownTimeout = config.ShutdownTimeout
+	if runtime.ShutdownTimeout == 0 {
+		runtime.ShutdownTimeout = 30 * time.Second
+	}
+	return &TCPServer{Server: runtime, Address: address, Options: config, prepareErr: err, ready: make(chan struct{})}
+}
+
+func (s *TCPServer) Loop() error {
+	if err := s.prepare(context.Background()); err != nil {
+		return err
+	}
+	return s.Server.Loop()
+}
+
+func (s *TCPServer) LoopContext(ctx context.Context) error {
+	if err := s.prepare(ctx); err != nil {
+		return err
+	}
+	return s.Server.LoopContext(ctx)
+}
+
+func (s *TCPServer) Addr() net.Addr {
+	if s.service == nil {
+		return nil
+	}
+	return s.service.Addr()
+}
+
+// Ready is closed after network binding succeeds or fails.
+func (s *TCPServer) Ready() <-chan struct{} { return s.ready }
+
+func (s *TCPServer) prepare(ctx context.Context) error {
+	s.prepareOnce.Do(func() {
+		defer close(s.ready)
+		if s.prepareErr != nil {
+			return
+		}
+		if s.OnConnect == nil {
+			s.prepareErr = errors.New("netx: TCP OnConnect is required")
+			return
+		}
+		s.service, s.prepareErr = NewTCPService(ctx, s.Address, s.OnConnect, s.Options)
+		if s.prepareErr == nil {
+			s.Server.Service = s.service
+		}
+	})
+	return s.prepareErr
+}
+
 // ListenAndServeTCP creates a production-ready TCP server, serves until ctx is
 // cancelled, then waits for active handlers to finish. Passing zero options
 // selects portable defaults.
@@ -48,7 +116,7 @@ func ListenAndServeTCP(ctx context.Context, address string, handler TCPHandler, 
 	if err != nil {
 		return err
 	}
-	server, err := NewTCPServer(ctx, address, handler, config)
+	server, err := NewTCPService(ctx, address, handler, config)
 	if err != nil {
 		return err
 	}
@@ -94,8 +162,9 @@ type UDPServerOptions struct {
 	OnError         func(error)
 }
 
-// NewUDPServer binds address and returns a server ready to Serve.
-func NewUDPServer(address string, handler UDPHandler, opts UDPServerOptions) (*udp.Server, error) {
+// NewUDPService binds address and returns the lower-level UDP service. Most
+// applications should use NewUDPServer.
+func NewUDPService(address string, handler UDPHandler, opts UDPServerOptions) (*udp.Server, error) {
 	if handler == nil {
 		return nil, errors.New("netx: nil UDP handler")
 	}
@@ -114,6 +183,73 @@ func NewUDPServer(address string, handler UDPHandler, opts UDPServerOptions) (*u
 	}), udp.Options{MaxPacketSize: opts.MaxPacketSize, MaxHandlers: opts.MaxHandlers, OnError: opts.OnError})
 }
 
+// UDPServer is a high-level, overridable UDP server.
+type UDPServer struct {
+	*Server
+	Address  string
+	Options  UDPServerOptions
+	OnPacket UDPHandler
+
+	prepareOnce sync.Once
+	prepareErr  error
+	service     *udp.Server
+	ready       chan struct{}
+}
+
+// NewUDPServer creates a UDP server. Set OnPacket, then call Loop or
+// LoopContext. Network binding is delayed until the loop starts.
+func NewUDPServer(address string, options ...UDPServerOptions) *UDPServer {
+	config, err := oneUDPOptions(options)
+	runtime := NewServer()
+	runtime.ShutdownTimeout = config.ShutdownTimeout
+	if runtime.ShutdownTimeout == 0 {
+		runtime.ShutdownTimeout = 30 * time.Second
+	}
+	return &UDPServer{Server: runtime, Address: address, Options: config, prepareErr: err, ready: make(chan struct{})}
+}
+
+func (s *UDPServer) Loop() error {
+	if err := s.prepare(); err != nil {
+		return err
+	}
+	return s.Server.Loop()
+}
+
+func (s *UDPServer) LoopContext(ctx context.Context) error {
+	if err := s.prepare(); err != nil {
+		return err
+	}
+	return s.Server.LoopContext(ctx)
+}
+
+func (s *UDPServer) Addr() net.Addr {
+	if s.service == nil {
+		return nil
+	}
+	return s.service.Addr()
+}
+
+// Ready is closed after network binding succeeds or fails.
+func (s *UDPServer) Ready() <-chan struct{} { return s.ready }
+
+func (s *UDPServer) prepare() error {
+	s.prepareOnce.Do(func() {
+		defer close(s.ready)
+		if s.prepareErr != nil {
+			return
+		}
+		if s.OnPacket == nil {
+			s.prepareErr = errors.New("netx: UDP OnPacket is required")
+			return
+		}
+		s.service, s.prepareErr = NewUDPService(s.Address, s.OnPacket, s.Options)
+		if s.prepareErr == nil {
+			s.Server.Service = s.service
+		}
+	})
+	return s.prepareErr
+}
+
 // ListenAndServeUDP creates a UDP server, serves until ctx is cancelled, and
 // waits for active handlers to finish.
 func ListenAndServeUDP(ctx context.Context, address string, handler UDPHandler, opts ...UDPServerOptions) error {
@@ -121,7 +257,7 @@ func ListenAndServeUDP(ctx context.Context, address string, handler UDPHandler, 
 	if err != nil {
 		return err
 	}
-	server, err := NewUDPServer(address, handler, config)
+	server, err := NewUDPService(address, handler, config)
 	if err != nil {
 		return err
 	}

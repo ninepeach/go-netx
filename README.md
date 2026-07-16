@@ -81,26 +81,18 @@ return s.Loop()
 
 ## TCP service
 
-The TCP package handles listening, connection ownership, concurrency limits,
-and active connection shutdown. `tcp.Server` implements `netx.Service`.
+The TCP server exposes overridable functions directly:
 
 ```go
-tcpService, err := netx.NewTCPServer(
-	context.Background(),
-	":9000",
-	func(_ context.Context, conn net.Conn) error {
-		_, err := io.Copy(conn, conn)
-		return err
-	},
-	netx.TCPServerOptions{
-		MaxConnections: 4096,
-	},
-)
-if err != nil {
+s := netx.NewTCPServer(":9000", netx.TCPServerOptions{
+	MaxConnections: 4096,
+})
+s.OnConnect = func(_ context.Context, conn net.Conn) error {
+	_, err := io.Copy(conn, conn)
 	return err
 }
 
-return netx.NewServer(tcpService).Loop()
+return s.Loop()
 ```
 
 TCP Fast Open can be enabled through socket options:
@@ -123,22 +115,18 @@ depending on the selected policy.
 
 ## UDP service
 
-`udp.Server` also implements `netx.Service`. A handler returns the response
+The UDP server follows the same object model. `OnPacket` returns the response
 datagram; returning `nil, nil` sends nothing.
 
 ```go
-udpService, err := netx.NewUDPServer(
-	":9001",
-	func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
-		return request.Payload, nil
-	},
-	netx.UDPServerOptions{MaxHandlers: 256},
-)
-if err != nil {
-	return err
+s := netx.NewUDPServer(":9001", netx.UDPServerOptions{
+	MaxHandlers: 256,
+})
+s.OnPacket = func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
+	return request.Payload, nil
 }
 
-return netx.NewServer(udpService).Loop()
+return s.Loop()
 ```
 
 ## Lifecycle behavior
@@ -174,7 +162,7 @@ go run ./examples/udp-client "hello UDP"
 
 ## Packages
 
-- `netx`: service lifecycle and high-level TCP/UDP constructors.
+- `netx`: service lifecycle and overridable TCP/UDP servers.
 - `tcp`: TCP listener, connection lifecycle, limits, and dialer.
 - `udp`: packet server, bounded handlers, response writer, and client.
 - `socket`: socket configuration and Linux TCP Fast Open.

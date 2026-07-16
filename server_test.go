@@ -14,15 +14,17 @@ import (
 
 func TestHighLevelTCPServerCommunicates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	server, err := netx.NewTCPServer(ctx, "127.0.0.1:0", func(_ context.Context, conn net.Conn) error {
+	server := netx.NewTCPServer("127.0.0.1:0", netx.TCPServerOptions{MaxConnections: 8})
+	server.OnConnect = func(_ context.Context, conn net.Conn) error {
 		_, err := io.Copy(conn, conn)
 		return err
-	}, netx.TCPServerOptions{MaxConnections: 8})
-	if err != nil {
-		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- server.Serve(ctx) }()
+	go func() { done <- server.LoopContext(ctx) }()
+	<-server.Ready()
+	if server.Addr() == nil {
+		t.Fatalf("server failed to bind: %v", <-done)
+	}
 
 	conn, err := tcp.Dial(ctx, "tcp", server.Addr().String())
 	if err != nil {
@@ -40,11 +42,6 @@ func TestHighLevelTCPServerCommunicates(t *testing.T) {
 	}
 	conn.Close()
 	cancel()
-	shutdownCtx, stop := context.WithTimeout(context.Background(), time.Second)
-	defer stop()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		t.Fatal(err)
-	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
@@ -52,14 +49,16 @@ func TestHighLevelTCPServerCommunicates(t *testing.T) {
 
 func TestHighLevelUDPServerCommunicates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	server, err := netx.NewUDPServer("127.0.0.1:0", func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
+	server := netx.NewUDPServer("127.0.0.1:0")
+	server.OnPacket = func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
 		return append([]byte("reply:"), request.Payload...), nil
-	}, netx.UDPServerOptions{})
-	if err != nil {
-		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- server.Serve(ctx) }()
+	go func() { done <- server.LoopContext(ctx) }()
+	<-server.Ready()
+	if server.Addr() == nil {
+		t.Fatalf("server failed to bind: %v", <-done)
+	}
 	client, err := udp.Dial(ctx, "udp", server.Addr().String(), udp.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -75,21 +74,18 @@ func TestHighLevelUDPServerCommunicates(t *testing.T) {
 		t.Fatalf("got %q", response)
 	}
 	cancel()
-	shutdownCtx, stop := context.WithTimeout(context.Background(), time.Second)
-	defer stop()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		t.Fatal(err)
-	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestHighLevelServerValidation(t *testing.T) {
-	if _, err := netx.NewTCPServer(context.Background(), ":0", nil, netx.TCPServerOptions{}); err == nil {
+	tcpServer := netx.NewTCPServer(":0")
+	if err := tcpServer.LoopContext(context.Background()); err == nil {
 		t.Fatal("expected nil TCP handler error")
 	}
-	if _, err := netx.NewUDPServer(":0", nil, netx.UDPServerOptions{}); err == nil {
+	udpServer := netx.NewUDPServer(":0")
+	if err := udpServer.LoopContext(context.Background()); err == nil {
 		t.Fatal("expected nil UDP handler error")
 	}
 }

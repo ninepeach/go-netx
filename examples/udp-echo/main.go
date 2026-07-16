@@ -12,14 +12,15 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	udpService, err := netx.NewUDPServer(":9001", func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
+	s := netx.NewUDPServer(":9001")
+	s.OnPacket = func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
 		return request.Payload, nil
-	}, netx.UDPServerOptions{})
-	if err != nil {
-		log.Fatal(err)
 	}
-	log.Printf("UDP echo listening on %s", udpService.Addr())
-	if err := netx.NewServer(udpService).LoopContext(ctx); err != nil {
+	s.OnStart = func(context.Context) error {
+		log.Printf("UDP echo listening on %s", s.Addr())
+		return nil
+	}
+	if err := s.LoopContext(ctx); err != nil {
 		log.Fatal(err)
 	}
 }
