@@ -5,28 +5,24 @@ lower-level networking packages for applications that need complete control.
 
 ## Service lifecycle
 
-Applications build their own service. `netx` only manages startup, serving,
-signals, errors, and graceful shutdown.
+`netx.Server` manages startup, serving, signals, errors, and graceful shutdown.
+Override only the functions needed by the service:
 
 ```go
-p, err := proxy.Build(cfg) // implemented by your application, not netx
-if err != nil {
-	return err
-}
-
 s := netx.NewServer()
-s.OnServe = func(context.Context) error {
-	return p.Run()
-}
-s.OnShutdown = func(context.Context) error {
-	return p.Close()
-}
-
-return s.Loop() // SIGINT/SIGTERM + graceful shutdown
+s.OnServe = serve
+s.OnShutdown = shutdown
+return s.Loop()
 ```
 
-When the application implements the native lifecycle interface, the call is
-shorter:
+The callback signatures are:
+
+```go
+func serve(context.Context) error
+func shutdown(context.Context) error
+```
+
+For reusable implementations, satisfy the native lifecycle interface:
 
 ```go
 type Service interface {
@@ -50,12 +46,12 @@ Use `LoopContext(ctx)` when a parent application already manages signals. A
 Server is one-shot and follows `new → starting → running → stopping → stopped`.
 The default graceful shutdown timeout is 30 seconds.
 
-Existing `Run() error` and `Close() error` components can also use an adapter:
+Existing functions can also use an adapter:
 
 ```go
 s := netx.NewServer(netx.ServiceFuncs{
-	ServeFunc: func(context.Context) error { return p.Run() },
-	ShutdownFunc: func(context.Context) error { return p.Close() },
+	ServeFunc: serve,
+	ShutdownFunc: shutdown,
 })
 return s.Loop()
 ```
@@ -170,8 +166,8 @@ go run ./examples/udp-client "hello UDP"
 - `socket`: socket configuration and Linux TCP Fast Open.
 - `mux`: implementation-neutral session and stream contracts.
 
-Protocol parsing, authentication, routing, and proxy semantics intentionally
-remain above the server layer.
+Protocol parsing, authentication, routing, and other domain behavior
+intentionally remain above the server layer.
 
 ## Verification
 
