@@ -1,9 +1,71 @@
 # netx
 
-`netx` provides high-level TCP and UDP servers with safe lifecycle management,
-plus lower-level packages for applications that need complete control.
+`netx` provides a reusable service lifecycle, high-level TCP/UDP servers, and
+lower-level networking packages for applications that need complete control.
 
-## TCP server: one call
+## Service lifecycle
+
+Applications build their own service. `netx` only manages startup, serving,
+signals, errors, and graceful shutdown.
+
+```go
+p, err := proxy.Build(cfg) // implemented by your application, not netx
+if err != nil {
+	return err
+}
+
+s := netx.NewServer()
+s.OnServe = func(context.Context) error {
+	return p.Run()
+}
+s.OnShutdown = func(context.Context) error {
+	return p.Close()
+}
+
+return s.Loop() // SIGINT/SIGTERM + graceful shutdown
+```
+
+When the application implements the native lifecycle interface, the call is
+shorter:
+
+```go
+type Service interface {
+	Serve(context.Context) error
+	Shutdown(context.Context) error
+}
+
+s := netx.NewServer(service)
+s.OnStart = func(context.Context) error {
+	log.Print("service started")
+	return nil
+}
+s.OnStop = func(context.Context) error {
+	log.Print("service stopped")
+	return nil
+}
+return s.Loop()
+```
+
+Use `LoopContext(ctx)` when a parent application already manages signals. A
+Server is one-shot and follows `new → starting → running → stopping → stopped`.
+The default graceful shutdown timeout is 30 seconds.
+
+Existing `Run() error` and `Close() error` components can also use an adapter:
+
+```go
+s := netx.NewServer(netx.ServiceFuncs{
+	ServeFunc: func(context.Context) error { return p.Run() },
+	ShutdownFunc: func(context.Context) error { return p.Close() },
+})
+return s.Loop()
+```
+
+## Network servers
+
+The lifecycle API is independent of protocol implementations. The following
+helpers remain available for small standalone TCP and UDP servers.
+
+### TCP server: one call
 
 ```go
 package main
@@ -28,7 +90,7 @@ func main() {
 The high-level server automatically handles listening, the accept loop,
 connection ownership, handler goroutines, cancellation, and graceful shutdown.
 
-## UDP server: request in, response out
+### UDP server: request in, response out
 
 ```go
 package main
@@ -49,7 +111,7 @@ func main() {
 
 Returning `nil, nil` processes a datagram without sending a response.
 
-## Production options
+### Production options
 
 ```go
 err := netx.ListenAndServeTCP(ctx, ":9000", handler,
@@ -71,7 +133,7 @@ Linux supports TCP Fast Open for listeners and outbound sockets. Other
 platforms can return `socket.UnsupportedOptionError` or ignore the feature,
 depending on `Unsupported` policy.
 
-## Start first, serve separately
+### Start first, serve separately
 
 Use the constructors when the application needs the bound address or controls
 its own goroutines:

@@ -21,12 +21,15 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	if err != nil {
 		return err
 	}
-	defer session.Close()
-
+	streamCtx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
-	defer wg.Wait()
+	defer func() {
+		cancel()
+		_ = session.Close()
+		wg.Wait()
+	}()
 	for {
-		stream, err := session.AcceptStream(ctx)
+		stream, err := session.AcceptStream(streamCtx)
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return nil
@@ -37,7 +40,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		go func() {
 			defer wg.Done()
 			defer stream.Close()
-			if err := s.Handler.ServeStream(ctx, stream); err != nil && s.OnError != nil {
+			if err := s.Handler.ServeStream(streamCtx, stream); err != nil && s.OnError != nil {
 				s.OnError(err)
 			}
 		}()

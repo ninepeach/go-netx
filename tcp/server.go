@@ -36,6 +36,7 @@ type Server struct {
 	conns     map[net.Conn]struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
+	loopDone  chan struct{}
 }
 
 func NewServer(listener net.Listener, handler Handler, opts Options) (*Server, error) {
@@ -48,7 +49,7 @@ func NewServer(listener net.Listener, handler Handler, opts Options) (*Server, e
 	if opts.MaxConnections < 0 {
 		return nil, errors.New("tcp: MaxConnections must not be negative")
 	}
-	return &Server{listener: listener, handler: handler, opts: opts, conns: make(map[net.Conn]struct{})}, nil
+	return &Server{listener: listener, handler: handler, opts: opts, conns: make(map[net.Conn]struct{}), loopDone: make(chan struct{})}, nil
 }
 
 func Listen(ctx context.Context, network, address string, handler Handler, opts ListenOptions) (*Server, error) {
@@ -79,6 +80,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	s.serving = true
 	s.mu.Unlock()
+	defer close(s.loopDone)
 
 	stop := context.AfterFunc(ctx, func() { _ = s.Close() })
 	defer stop()
@@ -166,17 +168,37 @@ func (s *Server) Close() error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	_ = s.Close()
+	s.mu.Lock()
+	serving := s.serving
+	loopDone := s.loopDone
+	s.mu.Unlock()
+	if serving {
+		select {
+		case <-loopDone:
+		case <-ctx.Done():
+			s.closeActiveConnections()
+			return ctx.Err()
+		}
+	}
 	done := make(chan struct{})
 	go func() { s.wg.Wait(); close(done) }()
 	select {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		s.mu.Lock()
-		for conn := range s.conns {
-			_ = conn.Close()
-		}
-		s.mu.Unlock()
+		s.closeActiveConnections()
 		return ctx.Err()
+	}
+}
+
+func (s *Server) closeActiveConnections() {
+	s.mu.Lock()
+	connections := make([]net.Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		connections = append(connections, conn)
+	}
+	s.mu.Unlock()
+	for _, conn := range connections {
+		_ = conn.Close()
 	}
 }

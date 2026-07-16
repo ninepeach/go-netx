@@ -34,8 +34,11 @@ type Server struct {
 	conn      net.PacketConn
 	handler   Handler
 	opts      Options
+	mu        sync.Mutex
+	serving   bool
 	wg        sync.WaitGroup
 	closeOnce sync.Once
+	loopDone  chan struct{}
 }
 
 func NewServer(conn net.PacketConn, handler Handler, opts Options) (*Server, error) {
@@ -51,7 +54,7 @@ func NewServer(conn net.PacketConn, handler Handler, opts Options) (*Server, err
 	if opts.MaxPacketSize == 0 {
 		opts.MaxPacketSize = 64 * 1024
 	}
-	return &Server{conn: conn, handler: handler, opts: opts}, nil
+	return &Server{conn: conn, handler: handler, opts: opts, loopDone: make(chan struct{})}, nil
 }
 
 func Listen(network, address string, handler Handler, opts Options) (*Server, error) {
@@ -70,6 +73,14 @@ func Listen(network, address string, handler Handler, opts Options) (*Server, er
 func (s *Server) Addr() net.Addr { return s.conn.LocalAddr() }
 
 func (s *Server) Serve(ctx context.Context) error {
+	s.mu.Lock()
+	if s.serving {
+		s.mu.Unlock()
+		return errors.New("udp: Serve called more than once")
+	}
+	s.serving = true
+	s.mu.Unlock()
+	defer close(s.loopDone)
 	stop := context.AfterFunc(ctx, func() { _ = s.Close() })
 	defer stop()
 	var sem chan struct{}
@@ -118,6 +129,17 @@ func (s *Server) Close() error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	_ = s.Close()
+	s.mu.Lock()
+	serving := s.serving
+	loopDone := s.loopDone
+	s.mu.Unlock()
+	if serving {
+		select {
+		case <-loopDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	done := make(chan struct{})
 	go func() { s.wg.Wait(); close(done) }()
 	select {
