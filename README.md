@@ -164,8 +164,29 @@ make examples
 ./build/examples/tcp-echo
 ```
 
-The generated TCP and UDP server/client binaries are placed in
-`build/examples/`.
+The generated binaries are placed in `build/examples/`:
+
+- `tcp-echo`, `tcp-client`
+- `udp-echo`, `udp-client`
+- `http-server`
+- `socks5-server`
+
+Run the minimal HTTP server:
+
+```sh
+./build/examples/http-server
+curl http://127.0.0.1:8080/hello
+```
+
+Run the minimal no-auth SOCKS5 CONNECT server:
+
+```sh
+./build/examples/socks5-server
+curl --socks5-hostname 127.0.0.1:1080 https://example.com
+```
+
+The SOCKS5 example intentionally implements only the CONNECT command. Protocol
+logic remains in the example rather than the transport library.
 
 Start a server:
 

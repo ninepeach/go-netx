@@ -1,7 +1,7 @@
 .PHONY: fmt test race vet check examples clean
 
 EXAMPLE_DIR := build/examples
-EXAMPLES := tcp-echo tcp-client udp-echo udp-client
+EXAMPLES := tcp-echo tcp-client udp-echo udp-client http-server socks5-server
 
 fmt:
 	gofmt -w .
