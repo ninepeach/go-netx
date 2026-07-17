@@ -155,6 +155,26 @@ s := netx.NewTCPServer(":9000", netx.TCPServerOptions{
 TCP Fast Open is implemented on Linux. Other platforms return an unsupported
 option error or ignore it according to the selected policy.
 
+## Dial events
+
+TCP dialers can report one event after each connection attempt. The callback is
+optional; netx does not aggregate, score, log, or retry targets:
+
+```go
+dialer := tcp.NewDialer(tcp.DialOptions{
+	Timeout: 5 * time.Second,
+	OnDial: func(event tcp.DialEvent) {
+		log.Printf("target=%s duration=%s err=%v",
+			event.Address, event.Duration, event.Err)
+	},
+})
+
+conn, err := dialer.DialContext(ctx, "tcp", "example.com:443")
+```
+
+Successful events also contain local and remote socket addresses. Applications
+can use these objective results to calculate target-specific connection quality.
+
 ## Echo examples
 
 Build all example executables:
