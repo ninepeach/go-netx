@@ -1,4 +1,7 @@
-.PHONY: fmt test race vet check examples
+.PHONY: fmt test race vet check examples clean
+
+EXAMPLE_DIR := build/examples
+EXAMPLES := tcp-echo tcp-client udp-echo udp-client
 
 fmt:
 	gofmt -w .
@@ -15,4 +18,11 @@ vet:
 check: test race vet
 
 examples:
-	go build ./examples/...
+	@mkdir -p $(EXAMPLE_DIR)
+	@for example in $(EXAMPLES); do \
+		echo "building $(EXAMPLE_DIR)/$$example"; \
+		go build -o "$(EXAMPLE_DIR)/$$example" "./examples/$$example" || exit 1; \
+	done
+
+clean:
+	rm -rf build

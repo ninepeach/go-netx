@@ -157,6 +157,16 @@ option error or ignore it according to the selected policy.
 
 ## Echo examples
 
+Build all example executables:
+
+```sh
+make examples
+./build/examples/tcp-echo
+```
+
+The generated TCP and UDP server/client binaries are placed in
+`build/examples/`.
+
 Start a server:
 
 ```sh
