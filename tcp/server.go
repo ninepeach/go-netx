@@ -18,6 +18,8 @@ type ErrorHandler func(error)
 type Options struct {
 	MaxConnections int
 	OnError        ErrorHandler
+	OnOpen         func(context.Context, net.Conn) error
+	OnClose        func(net.Conn)
 }
 
 type ListenOptions struct {
@@ -129,6 +131,15 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 	defer s.wg.Done()
 	defer s.untrack(conn)
 	defer conn.Close()
+	if s.opts.OnClose != nil {
+		defer s.opts.OnClose(conn)
+	}
+	if s.opts.OnOpen != nil {
+		if err := s.opts.OnOpen(ctx, conn); err != nil {
+			s.report(err)
+			return
+		}
+	}
 	if err := s.handler.ServeTCP(ctx, conn); err != nil {
 		s.report(err)
 	}

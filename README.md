@@ -55,6 +55,21 @@ s := netx.NewTCPServer(":9000", netx.TCPServerOptions{
 })
 ```
 
+Use `OnOpen` and `OnClose` for protocol-independent connection setup and
+observability. Returning an error from `OnOpen` rejects the connection before
+the handler runs:
+
+```go
+s := netx.NewTCPServer(":9000", netx.TCPServerOptions{
+	OnOpen: func(_ context.Context, conn net.Conn) error {
+		return conn.SetDeadline(time.Now().Add(10 * time.Second))
+	},
+	OnClose: func(conn net.Conn) {
+		log.Printf("closed %s", conn.RemoteAddr())
+	},
+})
+```
+
 ## UDP server
 
 ```go
@@ -71,6 +86,8 @@ if err := s.Loop(); err != nil {
 
 The returned bytes are sent to the packet source. Return `nil, nil` to send no
 response. Use `UDPServerOptions.MaxHandlers` to limit concurrent handlers.
+UDP listeners now accept the same `socket.Options` family as TCP listeners,
+including `ReusePort` on supported platforms.
 
 ## Lifecycle hooks
 
@@ -160,7 +177,7 @@ go run ./examples/udp-client "hello UDP"
 
 - `netx`: overridable servers and service lifecycle.
 - `tcp`: TCP listener, connection lifecycle, limits, and dialer.
-- `udp`: packet server, response writer, and client.
+- `udp`: context-aware packet server, socket options, response writer, and client.
 - `socket`: socket options and Linux TCP Fast Open.
 - `mux`: session and stream contracts.
 

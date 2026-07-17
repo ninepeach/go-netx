@@ -61,12 +61,18 @@ func Dialer(base net.Dialer, opts Options) net.Dialer {
 
 func control(opts Options, outbound bool) func(string, string, syscall.RawConn) error {
 	return func(network, _ string, raw syscall.RawConn) error {
-		if network != "tcp" && network != "tcp4" && network != "tcp6" {
+		isTCP := network == "tcp" || network == "tcp4" || network == "tcp6"
+		isUDP := network == "udp" || network == "udp4" || network == "udp6"
+		if !isTCP && !isUDP {
 			return nil
+		}
+		options := opts
+		if !isTCP {
+			options.FastOpen = FastOpenOptions{}
 		}
 		var applyErr error
 		if err := raw.Control(func(fd uintptr) {
-			applyErr = applyOptions(fd, opts, outbound)
+			applyErr = applyOptions(fd, options, outbound)
 		}); err != nil {
 			return err
 		}

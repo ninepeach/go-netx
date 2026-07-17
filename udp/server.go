@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"sync"
+
+	"github.com/ninepeach/go-netx/socket"
 )
 
 type Packet struct {
@@ -28,6 +30,11 @@ type Options struct {
 	MaxPacketSize int
 	MaxHandlers   int
 	OnError       func(error)
+}
+
+type ListenOptions struct {
+	Server Options
+	Socket socket.Options
 }
 
 type Server struct {
@@ -58,11 +65,17 @@ func NewServer(conn net.PacketConn, handler Handler, opts Options) (*Server, err
 }
 
 func Listen(network, address string, handler Handler, opts Options) (*Server, error) {
-	conn, err := net.ListenPacket(network, address)
+	return ListenContext(context.Background(), network, address, handler, ListenOptions{Server: opts})
+}
+
+// ListenContext binds a UDP socket with protocol-independent socket options.
+func ListenContext(ctx context.Context, network, address string, handler Handler, opts ListenOptions) (*Server, error) {
+	lc := socket.ListenConfig(opts.Socket)
+	conn, err := lc.ListenPacket(ctx, network, address)
 	if err != nil {
 		return nil, err
 	}
-	srv, err := NewServer(conn, handler, opts)
+	srv, err := NewServer(conn, handler, opts.Server)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err

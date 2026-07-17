@@ -103,3 +103,36 @@ func TestNewServerValidation(t *testing.T) {
 		t.Fatal("expected nil handler error")
 	}
 }
+
+func TestConnectionHooks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opened := make(chan struct{}, 1)
+	closed := make(chan struct{}, 1)
+	srv, err := tcp.Listen(ctx, "tcp", "127.0.0.1:0", tcp.HandlerFunc(func(context.Context, net.Conn) error {
+		return nil
+	}), tcp.ListenOptions{Server: tcp.Options{
+		OnOpen:  func(context.Context, net.Conn) error { opened <- struct{}{}; return nil },
+		OnClose: func(net.Conn) { closed <- struct{}{} },
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(ctx) }()
+	conn, err := net.Dial("tcp", srv.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	select {
+	case <-opened:
+	case <-time.After(time.Second):
+		t.Fatal("OnOpen was not called")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("OnClose was not called")
+	}
+	_ = srv.Close()
+}

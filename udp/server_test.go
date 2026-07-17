@@ -57,3 +57,18 @@ func TestNewServerValidation(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestListenContext(t *testing.T) {
+	srv, err := udp.ListenContext(context.Background(), "udp", "127.0.0.1:0", udp.HandlerFunc(func(context.Context, udp.Writer, udp.Packet) error {
+		return nil
+	}), udp.ListenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Addr() == nil {
+		t.Fatal("listener has no address")
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

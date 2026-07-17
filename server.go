@@ -23,6 +23,8 @@ type TCPServerOptions struct {
 	ShutdownTimeout time.Duration
 	Socket          socket.Options
 	OnError         func(error)
+	OnOpen          func(context.Context, net.Conn) error
+	OnClose         func(net.Conn)
 }
 
 // NewTCPService binds address and returns the lower-level TCP service. Most
@@ -36,7 +38,7 @@ func NewTCPService(ctx context.Context, address string, handler TCPHandler, opts
 		network = "tcp"
 	}
 	return tcp.Listen(ctx, network, address, tcp.HandlerFunc(handler), tcp.ListenOptions{
-		Server: tcp.Options{MaxConnections: opts.MaxConnections, OnError: opts.OnError},
+		Server: tcp.Options{MaxConnections: opts.MaxConnections, OnError: opts.OnError, OnOpen: opts.OnOpen, OnClose: opts.OnClose},
 		Socket: opts.Socket,
 	})
 }
@@ -160,11 +162,16 @@ type UDPServerOptions struct {
 	MaxHandlers     int
 	ShutdownTimeout time.Duration
 	OnError         func(error)
+	Socket          socket.Options
 }
 
 // NewUDPService binds address and returns the lower-level UDP service. Most
 // applications should use NewUDPServer.
 func NewUDPService(address string, handler UDPHandler, opts UDPServerOptions) (*udp.Server, error) {
+	return NewUDPServiceContext(context.Background(), address, handler, opts)
+}
+
+func NewUDPServiceContext(ctx context.Context, address string, handler UDPHandler, opts UDPServerOptions) (*udp.Server, error) {
 	if handler == nil {
 		return nil, errors.New("netx: nil UDP handler")
 	}
@@ -172,7 +179,7 @@ func NewUDPService(address string, handler UDPHandler, opts UDPServerOptions) (*
 	if network == "" {
 		network = "udp"
 	}
-	return udp.Listen(network, address, udp.HandlerFunc(func(ctx context.Context, writer udp.Writer, packet udp.Packet) error {
+	return udp.ListenContext(ctx, network, address, udp.HandlerFunc(func(ctx context.Context, writer udp.Writer, packet udp.Packet) error {
 		response, err := handler(ctx, UDPRequest{
 			Payload: packet.Payload, RemoteAddr: packet.RemoteAddr, LocalAddr: packet.LocalAddr,
 		})
@@ -180,7 +187,10 @@ func NewUDPService(address string, handler UDPHandler, opts UDPServerOptions) (*
 			return err
 		}
 		return writer.WritePacket(ctx, response, packet.RemoteAddr)
-	}), udp.Options{MaxPacketSize: opts.MaxPacketSize, MaxHandlers: opts.MaxHandlers, OnError: opts.OnError})
+	}), udp.ListenOptions{
+		Server: udp.Options{MaxPacketSize: opts.MaxPacketSize, MaxHandlers: opts.MaxHandlers, OnError: opts.OnError},
+		Socket: opts.Socket,
+	})
 }
 
 // UDPServer is a high-level, overridable UDP server.
@@ -209,14 +219,14 @@ func NewUDPServer(address string, options ...UDPServerOptions) *UDPServer {
 }
 
 func (s *UDPServer) Loop() error {
-	if err := s.prepare(); err != nil {
+	if err := s.prepare(context.Background()); err != nil {
 		return err
 	}
 	return s.Server.Loop()
 }
 
 func (s *UDPServer) LoopContext(ctx context.Context) error {
-	if err := s.prepare(); err != nil {
+	if err := s.prepare(ctx); err != nil {
 		return err
 	}
 	return s.Server.LoopContext(ctx)
@@ -232,7 +242,7 @@ func (s *UDPServer) Addr() net.Addr {
 // Ready is closed after network binding succeeds or fails.
 func (s *UDPServer) Ready() <-chan struct{} { return s.ready }
 
-func (s *UDPServer) prepare() error {
+func (s *UDPServer) prepare(ctx context.Context) error {
 	s.prepareOnce.Do(func() {
 		defer close(s.ready)
 		if s.prepareErr != nil {
@@ -242,7 +252,7 @@ func (s *UDPServer) prepare() error {
 			s.prepareErr = errors.New("netx: UDP OnPacket is required")
 			return
 		}
-		s.service, s.prepareErr = NewUDPService(s.Address, s.OnPacket, s.Options)
+		s.service, s.prepareErr = NewUDPServiceContext(ctx, s.Address, s.OnPacket, s.Options)
 		if s.prepareErr == nil {
 			s.Server.Service = s.service
 		}
@@ -257,7 +267,7 @@ func ListenAndServeUDP(ctx context.Context, address string, handler UDPHandler, 
 	if err != nil {
 		return err
 	}
-	server, err := NewUDPService(address, handler, config)
+	server, err := NewUDPServiceContext(ctx, address, handler, config)
 	if err != nil {
 		return err
 	}
