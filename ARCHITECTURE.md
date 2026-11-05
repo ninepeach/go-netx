@@ -83,7 +83,8 @@ and call the handler inline. With `ReusePort` each reader has its own socket
 and the kernel pins each flow to one reader (`Packet.Reader`), so gateways can
 shard per-flow state without locks. There is no internal queue: the kernel
 receive buffer is the queue (`socket.Options.RecvBuffer`), and overflows are
-reported in `Stats.KernelDrops` on Linux. `MaxPacket` is capped at `udp.MaxPacketLimit` (65000).
+reported in `Stats.KernelDrops` on Linux. `udp.MaxDatagram` (65000) is the size limit in both directions;
+`MaxPacket` defaults to it and may not exceed it.
 Datagrams larger than `MaxPacket`
 are dropped and counted, never delivered truncated.
 

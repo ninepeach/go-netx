@@ -1,11 +1,10 @@
 # Changelog
 
-## v1.0.1
+## v1.1.0
 
 Fixes from module-by-module reviews. No API removals; additions are
-`udp.MaxDatagram`, `udp.MaxPacketLimit`, `udp.ErrNilPacket` and
-`udp.Stats.KernelDropsEnabled`. The default `MaxPacket` drops from 65535 to
-65000.
+`udp.MaxDatagram`, `udp.ErrNilPacket` and `udp.Stats.KernelDropsEnabled`.
+The default `MaxPacket` drops from 65535 to 65000.
 
 - netx: `OnStop` gets its own `ShutdownTimeout` budget instead of the
   drain's possibly expired context.
@@ -14,17 +13,16 @@ Fixes from module-by-module reviews. No API removals; additions are
   `Run` no longer evict actively touched flows. Sweep cost is documented.
 - udp: `Stats.KernelDrops` accumulates the kernel's 32-bit counter across
   wraparound instead of freezing at 2^32.
-- udp: `MaxPacket` only sizes the receive buffer; sends are limited by the
-  new `udp.MaxDatagram` (65527).
+- udp: one size limit in both directions, the new `udp.MaxDatagram`
+  (65000). `WriteTo`/`Reply` refuse longer payloads; `MaxPacket` defaults
+  to it and may not exceed it, so longer received datagrams are always
+  dropped as `Truncated`. A smaller `MaxPacket` no longer limits sends.
 - udp: `Close` interrupts a reader's error backoff instead of waiting up to
   a second.
 - udp: `Reply` returns `ErrNilPacket` for nil and falls back to `WriteTo`'s
   socket choice for a `Reader` index it did not assign, instead of
   panicking.
-- udp: `MaxPacket` is capped at, and defaults to, the new
-  `udp.MaxPacketLimit` (65000). Received datagrams longer than that are
-  always dropped as `Truncated`. `Readers` sizing is documented as the
-  caller's responsibility.
+- udp: `Readers` sizing is documented as the caller's responsibility.
 - udp: `Stats.KernelDropsEnabled` tells "no drops" apart from "drops not
   measured".
 - socket/tcp/udp: `RecvBuffer` and `SendBuffer` are applied before bind.

@@ -32,18 +32,14 @@ var (
 	// on a closed Conn.
 	ErrClosed = errors.New("udp: closed")
 	// ErrTooLarge is returned when writing more than MaxDatagram bytes.
-	// The kernel may reject smaller datagrams too (for example above
-	// 65507 bytes over IPv4); that error is returned as is.
 	ErrTooLarge = errors.New("udp: datagram exceeds MaxDatagram")
 )
 
-// MaxDatagram is the largest UDP payload any IP version can carry. It
-// limits sends.
-const MaxDatagram = 65535 - 8
-
-// MaxPacketLimit is the largest allowed Options.MaxPacket and its default.
-// Received datagrams longer than this are always dropped as Truncated.
-const MaxPacketLimit = 65000
+// MaxDatagram is the largest datagram go-netx sends or receives, in both
+// directions. WriteTo and Reply refuse longer payloads with ErrTooLarge;
+// Options.MaxPacket defaults to it and may not exceed it, so received
+// datagrams longer than this are always dropped as Truncated.
+const MaxDatagram = 65000
 
 // Packet is one received datagram.
 type Packet struct {
@@ -78,8 +74,9 @@ type Options struct {
 	// typically no more than the number of CPUs.
 	Readers int
 	// MaxPacket is the receive buffer size per reader, at most
-	// MaxPacketLimit (also the default). Larger incoming datagrams are
-	// dropped and counted as Truncated. It does not limit sends.
+	// MaxDatagram (also the default). Larger incoming datagrams are
+	// dropped and counted as Truncated. Sends are limited by MaxDatagram,
+	// not by MaxPacket.
 	//
 	// Size it to the protocol: gateways whose datagrams fit in one MTU
 	// (game, media) do well with 1500-2048, which keeps reader buffers
@@ -165,14 +162,14 @@ func Listen(ctx context.Context, network, address string, h Handler, o Options) 
 	if o.Readers < 0 || o.MaxPacket < 0 {
 		return nil, errors.New("udp: options must not be negative")
 	}
-	if o.MaxPacket > MaxPacketLimit {
-		return nil, fmt.Errorf("udp: MaxPacket %d exceeds MaxPacketLimit %d", o.MaxPacket, MaxPacketLimit)
+	if o.MaxPacket > MaxDatagram {
+		return nil, fmt.Errorf("udp: MaxPacket %d exceeds MaxDatagram %d", o.MaxPacket, MaxDatagram)
 	}
 	if o.Readers == 0 {
 		o.Readers = 1
 	}
 	if o.MaxPacket == 0 {
-		o.MaxPacket = MaxPacketLimit
+		o.MaxPacket = MaxDatagram
 	}
 	nsock := 1
 	if o.Socket.ReusePort {

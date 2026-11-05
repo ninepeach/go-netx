@@ -190,10 +190,10 @@ func TestReplyValidatesPacket(t *testing.T) {
 }
 
 func TestMaxPacketBound(t *testing.T) {
-	if _, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{MaxPacket: udp.MaxPacketLimit + 1}); err == nil {
+	if _, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{MaxPacket: udp.MaxDatagram + 1}); err == nil {
 		t.Fatal("MaxPacket above the limit accepted")
 	}
-	c, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{MaxPacket: udp.MaxPacketLimit})
+	c, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{MaxPacket: udp.MaxDatagram})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,15 +202,15 @@ func TestMaxPacketBound(t *testing.T) {
 
 // With the default MaxPacket, a datagram at the limit is delivered and one
 // byte more is dropped as Truncated.
-func TestDefaultMaxPacketLimit(t *testing.T) {
+func TestDefaultMaxDatagram(t *testing.T) {
 	got := make(chan int, 2)
 	c := start(t, func(_ *udp.Conn, p *udp.Packet) { got <- len(p.Data) }, udp.Options{})
 	cl := dial(t, c)
-	if _, err := cl.Write(make([]byte, udp.MaxPacketLimit+1)); err != nil {
+	if _, err := cl.Write(make([]byte, udp.MaxDatagram+1)); err != nil {
 		t.Skip("loopback cannot send this size:", err)
 	}
-	cl.Write(make([]byte, udp.MaxPacketLimit))
-	if n := <-got; n != udp.MaxPacketLimit {
+	cl.Write(make([]byte, udp.MaxDatagram))
+	if n := <-got; n != udp.MaxDatagram {
 		t.Fatalf("delivered %d bytes", n)
 	}
 	if s := c.Stats(); s.Truncated != 1 {
