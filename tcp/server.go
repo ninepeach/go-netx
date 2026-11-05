@@ -114,8 +114,9 @@ func (s *Server) Addr() net.Addr { return s.ln.Addr() }
 func (s *Server) Draining() <-chan struct{} { return s.draining }
 
 // Serve accepts until Shutdown or Close, or until ctx is cancelled, which
-// aborts. It returns after every handler has returned. Values in ctx are
-// visible to handlers.
+// aborts. It returns after every handler has returned. A permanent accept
+// error aborts all connections and is returned. Values in ctx are visible
+// to handlers.
 func (s *Server) Serve(ctx context.Context) error {
 	s.mu.Lock()
 	switch {
@@ -135,6 +136,12 @@ func (s *Server) Serve(ctx context.Context) error {
 	defer stop()
 
 	err := s.acceptLoop()
+	if err != nil {
+		// The listener is broken: nothing new can arrive and the process
+		// will be restarted, so abort instead of waiting on handlers that
+		// may never finish.
+		s.abortAll()
+	}
 	s.wg.Wait()
 	s.abort()
 	return err

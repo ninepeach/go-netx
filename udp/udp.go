@@ -49,7 +49,13 @@ type Packet struct {
 }
 
 // Handler is called inline on the reader goroutine for every datagram.
-// It must not block for long: while it runs, its reader receives nothing.
+//
+// It must finish in bounded time and must not perform blocking operations it
+// cannot bound. While it runs its reader receives nothing, and neither
+// Shutdown nor Close can interrupt it: closing the socket only stops the
+// next read, so a handler that never returns keeps Serve from returning.
+// There is deliberately no context. Work that may wait belongs on a
+// gateway-owned goroutine fed through a bounded queue (see package queue).
 // Panics are not recovered.
 type Handler func(c *Conn, p *Packet)
 

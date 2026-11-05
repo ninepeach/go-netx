@@ -32,17 +32,20 @@ func NewConcurrency(max int) *Concurrency {
 }
 
 func (c *Concurrency) TryAcquire() bool {
-	if c.inUse.Add(1) > c.max {
-		c.inUse.Add(-1)
-		return false
+	for {
+		n := c.inUse.Load()
+		if n >= c.max {
+			return false
+		}
+		if c.inUse.CompareAndSwap(n, n+1) {
+			return true
+		}
 	}
-	return true
 }
 
 func (c *Concurrency) Release() { c.inUse.Add(-1) }
 
-// InUse returns current holders. Concurrent failed attempts may make it
-// briefly exceed Max.
+// InUse returns current holders. It never exceeds Max.
 func (c *Concurrency) InUse() int64 { return c.inUse.Load() }
 func (c *Concurrency) Max() int64   { return c.max }
 
@@ -123,16 +126,21 @@ func NewBudget(max int64) *Budget {
 }
 
 // Reserve takes n units if they fit and reports whether it did. Negative n
-// is refused, so Reserve can never raise the remaining capacity.
+// is refused. The check is overflow-safe and Used never exceeds Max, even
+// transiently.
 func (b *Budget) Reserve(n int64) bool {
 	if n < 0 {
 		return false
 	}
-	if b.used.Add(n) > b.max {
-		b.used.Add(-n)
-		return false
+	for {
+		used := b.used.Load()
+		if n > b.max-used { // no overflow: 0 <= used <= max
+			return false
+		}
+		if b.used.CompareAndSwap(used, used+n) {
+			return true
+		}
 	}
-	return true
 }
 
 // Release returns n units previously taken with Reserve. Releasing a

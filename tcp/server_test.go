@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,5 +155,43 @@ func TestServeContextCancelAborts(t *testing.T) {
 	}
 	if err := s.Serve(context.Background()); err != tcp.ErrClosed {
 		t.Fatal(err)
+	}
+}
+
+// brokenListener accepts from inner once, then fails permanently.
+type brokenListener struct {
+	net.Listener
+	n int
+}
+
+func (l *brokenListener) Accept() (net.Conn, error) {
+	l.n++
+	if l.n > 1 {
+		return nil, errors.New("listener broken")
+	}
+	return l.Listener.Accept()
+}
+
+func TestPermanentAcceptErrorAbortsHandlers(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := tcp.NewServer(&brokenListener{Listener: inner}, func(ctx context.Context, c *tcp.Conn) {
+		<-ctx.Done() // long-lived: only abort ends it
+	}, tcp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- s.Serve(context.Background()) }()
+	dial(t, s)
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "listener broken") {
+			t.Fatalf("Serve returned %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve waited forever on a long-lived handler")
 	}
 }

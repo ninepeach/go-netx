@@ -55,7 +55,13 @@ func TestEcho(t *testing.T) {
 	if err != nil || string(in[:n]) != "hello" {
 		t.Fatalf("%q %v", in[:n], err)
 	}
+	// The reply can reach the client before the server counts the send.
+	deadline := time.Now().Add(time.Second)
 	s := c.Stats()
+	for s.SendPackets == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		s = c.Stats()
+	}
 	if s.RecvPackets != 1 || s.SendPackets != 1 || s.RecvBytes != 5 {
 		t.Fatalf("%+v", s)
 	}

@@ -1,6 +1,7 @@
 package limit
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -111,7 +112,7 @@ func TestBudgetParallelNeverExceeds(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 2000; j++ {
 				if b.Reserve(64) {
-					if b.Used() > b.Max()+64*32 { // in-flight attempts bounded
+					if b.Used() > b.Max() {
 						over.Store(true)
 					}
 					b.Release(64)
@@ -122,5 +123,47 @@ func TestBudgetParallelNeverExceeds(t *testing.T) {
 	wg.Wait()
 	if over.Load() || b.Used() != 0 {
 		t.Fatalf("used=%d", b.Used())
+	}
+}
+
+func TestBudgetOverflow(t *testing.T) {
+	b := NewBudget(math.MaxInt64)
+	if !b.Reserve(1) {
+		t.Fatal("reserve 1")
+	}
+	if b.Reserve(math.MaxInt64) {
+		t.Fatal("overflow bypassed the limit")
+	}
+	if b.Used() != 1 {
+		t.Fatalf("used=%d", b.Used())
+	}
+	if !b.Reserve(math.MaxInt64 - 1) {
+		t.Fatal("exact fit refused")
+	}
+}
+
+func TestConcurrencyNeverExceedsMax(t *testing.T) {
+	c := NewConcurrency(4)
+	var wg sync.WaitGroup
+	var over atomic.Bool
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 2000; j++ {
+				if c.TryAcquire() {
+					if c.InUse() > c.Max() {
+						over.Store(true)
+					}
+					c.Release()
+				} else if c.InUse() > c.Max() {
+					over.Store(true)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if over.Load() {
+		t.Fatal("InUse exceeded Max")
 	}
 }
