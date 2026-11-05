@@ -29,21 +29,17 @@ func applyOptions(fd uintptr, opts Options, outbound bool) error {
 	if outbound {
 		value, option = 1, tcpFastOpenConnect
 	}
-	return fastOpenResult(syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, option, value), opts.FastOpen.Unsupported)
+	return fastOpenResult(syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, option, value))
 }
 
-// fastOpenResult applies the Unsupported policy only to errors meaning the
-// kernel lacks TCP Fast Open. Any other error is returned unchanged, even
-// under UnsupportedIgnore.
-func fastOpenResult(err error, policy UnsupportedPolicy) error {
+// fastOpenResult converts only kernel errors that mean TCP Fast Open is
+// unavailable. All other system-call errors are preserved.
+func fastOpenResult(err error) error {
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, syscall.ENOPROTOOPT) && !errors.Is(err, syscall.EOPNOTSUPP) {
 		return err
-	}
-	if policy == UnsupportedIgnore {
-		return nil
 	}
 	return &UnsupportedOptionError{Option: "TCP Fast Open", Platform: "linux"}
 }
