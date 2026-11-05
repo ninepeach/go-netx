@@ -8,24 +8,15 @@ import (
 	"time"
 )
 
-// UnsupportedPolicy controls what happens when an optional socket feature is
-// unavailable on the current platform.
-type UnsupportedPolicy uint8
-
-const (
-	UnsupportedError UnsupportedPolicy = iota
-	UnsupportedIgnore
-)
-
 // FastOpenOptions controls TCP Fast Open for listeners and outbound sockets.
+// If the platform or kernel does not support it, socket creation fails.
 type FastOpenOptions struct {
-	Enabled     bool
-	Backlog     int
-	Unsupported UnsupportedPolicy
+	Enabled bool
+	Backlog int
 }
 
 // Options contains portable socket configuration. Platform-specific features
-// follow the policy configured by the caller.
+// return explicit errors when a requested feature is unavailable.
 type Options struct {
 	FastOpen FastOpenOptions
 	// ReusePort lets several sockets bind the same address. Linux and
@@ -155,7 +146,7 @@ func control(opts Options, outbound bool) func(string, string, syscall.RawConn) 
 // checkNetwork refuses options that cannot apply to the network instead of
 // dropping them silently: any option on a network other than TCP or UDP,
 // and the TCP-only options (Fast Open, keep-alive) on UDP. This is a
-// configuration error, so UnsupportedIgnore does not cover it.
+// configuration error and always fails explicitly.
 func checkNetwork(network string, o Options) error {
 	isTCP := network == "tcp" || network == "tcp4" || network == "tcp6"
 	isUDP := network == "udp" || network == "udp4" || network == "udp6"

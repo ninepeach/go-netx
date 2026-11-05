@@ -4,10 +4,9 @@ package socket
 
 import "runtime"
 
-// fastOpenUnsupported applies the Unsupported policy where TCP Fast Open is
-// not implemented.
+// fastOpenUnsupported reports unsupported TCP Fast Open without a fallback.
 func fastOpenUnsupported(opts Options) error {
-	if opts.FastOpen.Enabled && opts.FastOpen.Unsupported == UnsupportedError {
+	if opts.FastOpen.Enabled {
 		return &UnsupportedOptionError{Option: "TCP Fast Open", Platform: runtime.GOOS}
 	}
 	return nil
