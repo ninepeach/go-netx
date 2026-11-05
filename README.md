@@ -3,7 +3,7 @@
 Minimal, high-performance TCP and UDP foundation for Go gateways: no
 per-packet goroutines, no per-packet allocation, no internal queues, no
 dependencies. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and its
-frozen rules.
+frozen rules, and [docs/TESTING.md](docs/TESTING.md) for the test checklist.
 
 ```
 netx    runtime: start, signals, stop accepting → drain → abort
@@ -86,3 +86,6 @@ make examples
 ```sh
 make check   # test, race (with and without -tags netxdebug), vet
 ```
+
+The per-module test matrix, regression list and a general checklist for
+network libraries live in [docs/TESTING.md](docs/TESTING.md).
