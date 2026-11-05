@@ -11,6 +11,15 @@
   connection cap, local to one server, with IPv6 grouped by prefix
   (default /64). `tcp.Stats.RejectedPerIP` counts refusals.
 - `limit.PerKey[K]`: per-key concurrency limiter that forgets keys at zero.
+- `stream` package: `Reader` keeps a 512B buffer while idle and borrows
+  larger ones from a `buf.Pool` only while data is pending (`Peek`,
+  `Discard`, `Fill`, `Read`, `Max`, `ErrTooLarge`, `ErrNoBuffer`);
+  `Writer` sends queued `*buf.Buf`s with one writev and releases them.
+- `tcp.Conn.WriteBuffers`, so writev survives the `*tcp.Conn` wrapper
+  (`stream.BuffersWriter`).
+- `make verify` also runs the tests without `-race`, where allocation
+  assertions are not skipped; `make fuzz` caps input minimization
+  (`FUZZMIN`).
 
 ### Changed
 

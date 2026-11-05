@@ -30,7 +30,8 @@ should reimplement.
 | `flow/` | Flow | Flow ID (doubles as epoch), close state machine, idle-expiring `Table` | I/O, authentication, user identity |
 | `limit/` | Resource control | Admission (`Limiter`), totals (`Budget`) | Queues |
 | `queue/` | Resource control | Bounded `Ring`, overflow policy, backpressure | Global budgets |
-| `buf/` | Buffer management | `Pool`, size classes, ownership rules | Encoding |
+| `buf/` | Buffer management | `Pool`, size classes, ownership rules | Encoding, I/O |
+| `stream/` | Stream I/O | `Reader` that grows and shrinks with pending data, `Writer` that sends a backlog with one writev | Framing, protocols |
 | `internal/` | — | Syscalls, padded counters | Anything public |
 
 Observability has no package: every component exposes `Stats()` returning a
@@ -48,12 +49,14 @@ gateway.
 netx (root)        → nothing
 limit, queue, flow → nothing
 buf                → limit
+stream             → buf
 socket             → nothing
 tcp                → socket, limit, internal
 udp                → socket, internal
 ```
 
-- Transports do not import `flow`, `queue` or `buf`. Gateways compose them.
+- Transports do not import `flow`, `queue`, `buf` or `stream`. Gateways
+  compose them (for example a `stream.Reader` over a `*tcp.Conn`).
 - `tcp` and `udp` never import each other. The root never imports them;
   they satisfy `netx.Service` structurally.
 - No cycles, ever.
@@ -130,7 +133,7 @@ and rejected when it only pays off for short ones.
 | 503 on overload | browsers need a status code | the protocol is the gateway's | rejected (D-08) |
 | `MaxConnsPerIP` | one source exhausting connections | same need on a public gateway | adopted (v1.1.0) |
 | Keepalive settings | managing reused idle connections | must detect peers that vanished | adopted (v1.1.0) |
-| `ReduceMemoryUsage` | idle keep-alive connections holding buffers | connections are idle most of the time: the gain is larger | planned (pattern, below) |
+| `ReduceMemoryUsage` | idle keep-alive connections holding buffers | connections are idle most of the time: the gain is larger | adopted as `stream.Reader` |
 
 From net/http and from go-netx's own requirements:
 
@@ -195,15 +198,65 @@ Recorded as design decisions D-07 to D-09 in docs/TESTING.md.
    client address arrives (source preservation, or a future PROXY protocol
    option); otherwise every client looks like the balancer.
 
+### Stream I/O (`stream`, v1.1.0)
+
+Two buffer behaviours from netpoll and fasthttp, built on go-netx's own
+model instead of their event loops (see the netpoll comparison below):
+
+- **`stream.Reader` holds memory only while data is pending.** It keeps a
+  512B buffer while the connection is idle, moves to `buf.Pool`'s size
+  classes when a frame needs more, and goes back once the data is consumed
+  after a light read. `Peek`/`Discard` let a gateway decoder accumulate a
+  frame across reads; where the frame ends stays the decoder's decision.
+  `Max` bounds a frame (`ErrTooLarge`); a short budget gives `ErrNoBuffer`
+  without losing buffered data. Measured with 4000 idle connections: about
+  3.6KB less per connection than a 4KB `bufio.Reader`.
+- **`stream.Writer` sends a backlog with one writev.** `Add` takes ownership
+  of a `*buf.Buf`; `Flush` writes them in order and releases them all,
+  written or not. A single buffer uses `Write`. Measured through a
+  `*tcp.Conn`: 8 queued messages about 6× faster than one `Write` each, 32
+  about 9–10×, with no allocations.
+
+`net.Buffers` only uses writev on the standard library's own connection
+types, so wrapping a `net.Conn` silently loses it. `*tcp.Conn` therefore
+implements `stream.BuffersWriter`, passing writev through to the socket.
+Wrappers must do the same, never unwrap: unwrapping a TLS connection would
+bypass encryption.
+
+`stream` is a package of its own (D-12): `buf` manages memory only and the
+transports hold no buffers, so either would lose its single job.
+
 ### Still planned
 
-- **Idle connections hold no buffers** (a gateway pattern, to be documented
-  with an example rather than built in). 100k idle connections with a 4KB
-  read buffer each pin 400MB. Wait for data with a small buffer, then
-  borrow a large one from `buf.Pool` for the burst and release it when the
-  connection goes quiet, as fasthttp's `ReduceMemoryUsage` does.
 - **PROXY protocol** support, if gateways run behind L4 load balancers that
   do not preserve the source address.
+
+## Connection model compared with cloudwego/netpoll
+
+netpoll (`d63d249`, 2026-08) replaces Go's netpoller with its own epoll
+loops: a poller reads incoming data into the connection's `LinkBuffer`, then
+a pooled goroutine runs `OnRequest`. An idle connection therefore holds no
+goroutine at all; with goroutine-per-connection it holds one blocked in
+`Read`.
+
+Measured for go-netx (9000 idle connections, small read buffer): about 2KB
+of stack and under 1KB of heap per connection, so about 300MB per 100k
+connections, more if handlers grow their stacks. netpoll saves most of
+that, and IM's many mostly-idle connections are exactly its strength.
+
+go-netx keeps goroutine-per-connection (D-11): at up to around 100k
+connections per node the cost is acceptable, and the standard model keeps
+TLS, Windows and macOS development, the `net.Conn` ecosystem, zero
+dependencies and simple code. netpoll in turn is Linux/BSD only, has no TLS,
+depends on ByteDance's gopkg, and requires `OnRequest` to drain all input or
+it spins. A gateway that needs 500k–1M connections per node should use
+netpoll (or gnet) directly rather than go-netx growing its own event loop.
+
+Adopted from netpoll: the adaptive read buffer and gathered writes, as
+`stream`. Not adopted: its poller, its goroutine pool (D-07), and
+`LinkBuffer`'s linked-chunk API, which exists because netpoll's poller reads
+before a handler exists; with the handler reading for itself, one
+contiguous buffer is enough.
 
 ## Ownership rules
 
