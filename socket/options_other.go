@@ -1,11 +1,11 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package socket
 
 import "runtime"
 
 func applyOptions(_ uintptr, opts Options, _ bool) error {
-	if opts.FastOpen.Enabled && opts.FastOpen.Unsupported == UnsupportedError {
+	if opts.FastOpen.Enabled {
 		return &UnsupportedOptionError{Option: "TCP Fast Open", Platform: runtime.GOOS}
 	}
 	if opts.ReusePort {
