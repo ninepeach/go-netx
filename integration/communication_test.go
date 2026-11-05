@@ -1,3 +1,5 @@
+// Package integration_test composes every go-netx package the way a gateway
+// would. Run with -tags netxdebug to also check that no buffer leaks.
 package integration_test
 
 import (
@@ -5,121 +7,162 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ninepeach/go-netx"
+	"github.com/ninepeach/go-netx/buf"
+	"github.com/ninepeach/go-netx/flow"
+	"github.com/ninepeach/go-netx/limit"
+	"github.com/ninepeach/go-netx/queue"
 	"github.com/ninepeach/go-netx/tcp"
 	"github.com/ninepeach/go-netx/udp"
 )
 
-func TestTCPServerAndClientsCommunicate(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	server, err := tcp.Listen(ctx, "tcp", "127.0.0.1:0", tcp.HandlerFunc(func(_ context.Context, conn net.Conn) error {
-		scanner := bufio.NewScanner(conn)
-		for scanner.Scan() {
-			if _, err := fmt.Fprintf(conn, "echo:%s\n", scanner.Text()); err != nil {
-				return err
+func TestTCPLineEcho(t *testing.T) {
+	ctx := context.Background()
+	ln, err := tcp.Listen(ctx, "tcp", "127.0.0.1:0", func(_ context.Context, c *tcp.Conn) {
+		sc := bufio.NewScanner(c)
+		for sc.Scan() {
+			if _, err := fmt.Fprintf(c, "echo:%s\n", sc.Text()); err != nil {
+				return
 			}
 		}
-		return scanner.Err()
-	}), tcp.ListenOptions{Server: tcp.Options{MaxConnections: 16}})
+	}, tcp.Options{Admit: limit.NewConcurrency(16)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	serveDone := make(chan error, 1)
-	go func() { serveDone <- server.Serve(ctx) }()
+	srv := netx.NewServer(ln)
+	done := make(chan error)
+	go func() { done <- srv.LoopContext(ctx) }()
 
-	const clients = 8
-	const messages = 20
+	const clients, messages = 8, 20
 	var wg sync.WaitGroup
 	errs := make(chan error, clients)
-	for clientID := 0; clientID < clients; clientID++ {
+	for id := 0; id < clients; id++ {
 		wg.Add(1)
-		go func(id int) {
+		go func() {
 			defer wg.Done()
-			conn, err := tcp.Dial(ctx, "tcp", server.Addr().String())
+			conn, err := net.Dial("tcp", ln.Addr().String())
 			if err != nil {
 				errs <- err
 				return
 			}
 			defer conn.Close()
-			reader := bufio.NewReader(conn)
-			for messageID := 0; messageID < messages; messageID++ {
-				message := fmt.Sprintf("client-%d-message-%d", id, messageID)
-				if _, err := fmt.Fprintln(conn, message); err != nil {
-					errs <- err
-					return
-				}
-				response, err := reader.ReadString('\n')
-				if err != nil {
-					errs <- err
-					return
-				}
-				if got, want := strings.TrimSpace(response), "echo:"+message; got != want {
-					errs <- fmt.Errorf("got %q, want %q", got, want)
+			r := bufio.NewReader(conn)
+			for m := 0; m < messages; m++ {
+				msg := fmt.Sprintf("client-%d-%d", id, m)
+				fmt.Fprintln(conn, msg)
+				line, err := r.ReadString('\n')
+				if err != nil || strings.TrimSpace(line) != "echo:"+msg {
+					errs <- fmt.Errorf("%q %v", line, err)
 					return
 				}
 			}
-		}(clientID)
+		}()
 	}
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	cancel()
-	shutdownCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
-	defer stop()
-	if err := server.Shutdown(shutdownCtx); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-serveDone; err != nil {
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestUDPServerAndClientCommunicate(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	server, err := udp.Listen("udp", "127.0.0.1:0", udp.HandlerFunc(func(ctx context.Context, writer udp.Writer, packet udp.Packet) error {
-		response := append([]byte("echo:"), packet.Payload...)
-		return writer.WritePacket(ctx, response, packet.RemoteAddr)
-	}), udp.Options{MaxHandlers: 4})
-	if err != nil {
-		t.Fatal(err)
-	}
-	serveDone := make(chan error, 1)
-	go func() { serveDone <- server.Serve(ctx) }()
+// peer is per-flow gateway state: a bounded outbound queue and its sender.
+type peer struct {
+	out *queue.Ring[*buf.Buf]
+}
 
-	client, err := udp.Dial(ctx, "udp", server.Addr().String(), udp.ClientOptions{})
+// TestUDPGatewayComposition: the read loop never blocks. Each datagram is
+// copied into an owned buffer and handed to the sender flow's queue; a
+// per-flow goroutine writes it back. Flows expire through flow.Table.
+func TestUDPGatewayComposition(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := buf.NewPool(limit.NewBudget(1 << 20))
+	var senders sync.WaitGroup
+
+	var conn *udp.Conn
+	flows := flow.NewTable(flow.TableOptions[netip.AddrPort, *peer]{
+		IdleTimeout: time.Minute,
+		OnClose:     func(_ netip.AddrPort, f *flow.Flow[*peer]) { f.Value.out.Close() },
+	})
+	newPeer := func(to netip.AddrPort) *peer {
+		p := &peer{out: queue.New(queue.Options[*buf.Buf]{
+			Cap: 64, Policy: queue.DropOldest, OnDrop: (*buf.Buf).Release,
+		})}
+		senders.Add(1)
+		go func() {
+			defer senders.Done()
+			defer p.out.Drain()
+			for {
+				b, err := p.out.PopWait(ctx)
+				if err != nil {
+					return
+				}
+				_ = conn.WriteTo(b.B, to)
+				b.Release()
+			}
+		}()
+		return p
+	}
+
+	conn, err := udp.Listen(ctx, "udp", "127.0.0.1:0", func(_ *udp.Conn, p *udp.Packet) {
+		f, _ := flows.GetOrOpen(p.From, func() *peer { return newPeer(p.From) })
+		b := pool.Copy(p.Data) // borrowed → owned
+		if b == nil {
+			return // over budget: drop
+		}
+		if !f.Value.out.Push(b) { // transfer failed: still ours
+			b.Release()
+		}
+	}, udp.Options{Readers: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
-	for i := 0; i < 50; i++ {
-		message := fmt.Sprintf("packet-%d", i)
-		exchangeCtx, stop := context.WithTimeout(ctx, time.Second)
-		response, err := client.Exchange(exchangeCtx, []byte(message))
-		stop()
+	srv := netx.NewServer(netx.Group(conn, netx.ServiceFuncs{ServeFunc: flows.Run}))
+	done := make(chan error)
+	go func() { done <- srv.LoopContext(ctx) }()
+
+	for c := 0; c < 4; c++ {
+		cl, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(conn.LocalAddr()))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, want := string(response), "echo:"+message; got != want {
-			t.Fatalf("got %q, want %q", got, want)
+		cl.SetDeadline(time.Now().Add(2 * time.Second))
+		in := make([]byte, 64)
+		for i := 0; i < 20; i++ {
+			msg := fmt.Sprintf("c%d-%d", c, i)
+			cl.Write([]byte(msg))
+			n, err := cl.Read(in)
+			if err != nil || string(in[:n]) != msg {
+				t.Fatalf("%q %v", in[:n], err)
+			}
 		}
+		cl.Close()
+	}
+	if flows.Len() != 4 {
+		t.Fatalf("flows=%d", flows.Len())
 	}
 
-	cancel()
-	shutdownCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
-	defer stop()
-	if err := server.Shutdown(shutdownCtx); err != nil {
+	if err := srv.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-serveDone; err != nil {
+	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+	cancel()
+	senders.Wait()
+	if buf.Debug && buf.Outstanding() != 0 {
+		t.Fatalf("%d buffers leaked", buf.Outstanding())
 	}
 }

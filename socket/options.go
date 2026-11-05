@@ -28,6 +28,32 @@ type FastOpenOptions struct {
 type Options struct {
 	FastOpen  FastOpenOptions
 	ReusePort bool
+	// RecvBuffer and SendBuffer set SO_RCVBUF and SO_SNDBUF in bytes when
+	// positive. The kernel may round or cap them. Transports apply them with
+	// SetBuffers after the socket exists.
+	RecvBuffer int
+	SendBuffer int
+}
+
+// BufferSetter is implemented by *net.UDPConn and *net.TCPConn.
+type BufferSetter interface {
+	SetReadBuffer(int) error
+	SetWriteBuffer(int) error
+}
+
+// SetBuffers applies RecvBuffer and SendBuffer to c.
+func SetBuffers(c BufferSetter, opts Options) error {
+	if opts.RecvBuffer > 0 {
+		if err := c.SetReadBuffer(opts.RecvBuffer); err != nil {
+			return err
+		}
+	}
+	if opts.SendBuffer > 0 {
+		if err := c.SetWriteBuffer(opts.SendBuffer); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // UnsupportedError reports that a requested option is unavailable.

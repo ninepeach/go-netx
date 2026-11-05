@@ -1,4 +1,4 @@
-.PHONY: fmt test race vet check examples clean
+.PHONY: fmt test race vet bench check examples clean
 
 EXAMPLE_DIR := build/examples
 EXAMPLES := tcp-echo tcp-client udp-echo udp-client http-server socks5-server
@@ -11,9 +11,13 @@ test:
 
 race:
 	go test -race ./...
+	go test -race -tags netxdebug ./...
 
 vet:
 	go vet ./...
+
+bench:
+	go test -run '^$$' -bench . -benchmem ./...
 
 check: test race vet
 

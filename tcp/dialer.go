@@ -18,6 +18,8 @@ type DialEvent struct {
 	Err        error
 }
 
+// Dialer dials TCP with socket options and an optional per-attempt event.
+// netx does not aggregate, score, log or retry targets.
 type Dialer struct {
 	inner  net.Dialer
 	onDial func(DialEvent)
@@ -51,10 +53,4 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 		d.onDial(event)
 	}
 	return conn, err
-}
-
-// Dial connects with a default Dialer. It is a convenience for applications
-// that do not need custom timeouts or socket options.
-func Dial(ctx context.Context, network, address string) (net.Conn, error) {
-	return NewDialer(DialOptions{}).DialContext(ctx, network, address)
 }

@@ -8,131 +8,151 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ninepeach/go-netx/limit"
 	"github.com/ninepeach/go-netx/tcp"
 )
 
-func TestServerEchoAndShutdown(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func echo(_ context.Context, c *tcp.Conn) { _, _ = io.Copy(c, c) }
 
-	srv, err := tcp.Listen(ctx, "tcp", "127.0.0.1:0", tcp.HandlerFunc(func(_ context.Context, conn net.Conn) error {
-		_, err := io.Copy(conn, conn)
-		return err
-	}), tcp.ListenOptions{})
+func start(t *testing.T, h tcp.Handler, o tcp.Options) (*tcp.Server, chan error) {
+	t.Helper()
+	s, err := tcp.Listen(context.Background(), "tcp", "127.0.0.1:0", h, o)
 	if err != nil {
 		t.Fatal(err)
 	}
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(context.Background()) }()
+	t.Cleanup(func() { _ = s.Close() })
+	return s, done
+}
 
-	serveDone := make(chan error, 1)
-	go func() { serveDone <- srv.Serve(ctx) }()
-
-	conn, err := net.Dial("tcp", srv.Addr().String())
+func dial(t *testing.T, s *tcp.Server) net.Conn {
+	t.Helper()
+	c, err := net.Dial("tcp", s.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = conn.Write([]byte("hello")); err != nil {
-		t.Fatal(err)
-	}
-	got := make([]byte, 5)
-	if _, err = io.ReadFull(conn, got); err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "hello" {
-		t.Fatalf("got %q", got)
-	}
-	_ = conn.Close()
+	t.Cleanup(func() { c.Close() })
+	c.SetDeadline(time.Now().Add(2 * time.Second))
+	return c
+}
 
-	cancel()
-	shutdownCtx, stop := context.WithTimeout(context.Background(), time.Second)
-	defer stop()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-serveDone; err != nil {
-		t.Fatal(err)
+func roundTrip(t *testing.T, c net.Conn, msg string) {
+	t.Helper()
+	c.Write([]byte(msg))
+	got := make([]byte, len(msg))
+	if _, err := io.ReadFull(c, got); err != nil || string(got) != msg {
+		t.Fatalf("got %q err %v", got, err)
 	}
 }
 
-func TestServerReportsHandlerErrorAndClosesConnection(t *testing.T) {
-	t.Parallel()
-	want := errors.New("handler failed")
-	reported := make(chan error, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	srv, err := tcp.Listen(ctx, "tcp", "127.0.0.1:0", tcp.HandlerFunc(func(context.Context, net.Conn) error {
-		return want
-	}), tcp.ListenOptions{Server: tcp.Options{OnError: func(err error) { reported <- err }}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go func() { _ = srv.Serve(ctx) }()
-	conn, err := net.Dial("tcp", srv.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	select {
-	case got := <-reported:
-		if !errors.Is(got, want) {
-			t.Fatalf("reported %v", got)
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met")
 		}
-	case <-time.After(time.Second):
-		t.Fatal("handler error not reported")
-	}
-	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	buf := make([]byte, 1)
-	if _, err := conn.Read(buf); err == nil {
-		t.Fatal("connection was not closed")
-	}
-	_ = srv.Close()
-}
-
-func TestNewServerValidation(t *testing.T) {
-	if _, err := tcp.NewServer(nil, tcp.HandlerFunc(func(context.Context, net.Conn) error { return nil }), tcp.Options{}); err == nil {
-		t.Fatal("expected nil listener error")
-	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	if _, err := tcp.NewServer(ln, nil, tcp.Options{}); err == nil {
-		t.Fatal("expected nil handler error")
+		time.Sleep(time.Millisecond)
 	}
 }
 
-func TestConnectionHooks(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+func TestEchoAndStats(t *testing.T) {
+	s, _ := start(t, echo, tcp.Options{})
+	c := dial(t, s)
+	roundTrip(t, c, "hello")
+	c.Close()
+	waitFor(t, func() bool { return s.Stats().Closed == 1 })
+	if st := s.Stats(); st.Accepted != 1 || st.Active != 0 {
+		t.Fatalf("%+v", st)
+	}
+}
+
+func TestConnIDsUnique(t *testing.T) {
+	ids := make(chan uint64, 2)
+	s, _ := start(t, func(_ context.Context, c *tcp.Conn) { ids <- c.ID() }, tcp.Options{})
+	dial(t, s)
+	dial(t, s)
+	a, b := <-ids, <-ids
+	if a == 0 || a == b {
+		t.Fatalf("ids %d %d", a, b)
+	}
+}
+
+func TestAdmitRejects(t *testing.T) {
+	s, _ := start(t, echo, tcp.Options{Admit: limit.NewConcurrency(1)})
+	roundTrip(t, dial(t, s), "a")
+	c2 := dial(t, s)
+	if _, err := c2.Read(make([]byte, 1)); err == nil {
+		t.Fatal("second connection admitted")
+	}
+	if st := s.Stats(); st.Rejected != 1 {
+		t.Fatalf("%+v", st)
+	}
+}
+
+func TestShutdownDrainsThenReturns(t *testing.T) {
+	gotDraining := make(chan struct{})
+	s, done := start(t, func(ctx context.Context, c *tcp.Conn) {
+		<-c.Draining()
+		if ctx.Err() != nil {
+			t.Error("handler context cancelled during drain")
+		}
+		close(gotDraining)
+	}, tcp.Options{})
+	dial(t, s)
+	waitFor(t, func() bool { return s.Stats().Active == 1 })
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-gotDraining
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := net.Dial("tcp", s.Addr().String()); err == nil {
+		t.Fatal("still accepting")
+	}
+}
+
+func TestShutdownAbortsOnTimeout(t *testing.T) {
+	aborted := make(chan struct{})
+	s, done := start(t, func(ctx context.Context, c *tcp.Conn) {
+		<-ctx.Done() // ignores Draining; only Abort ends it
+		close(aborted)
+	}, tcp.Options{})
+	c := dial(t, s)
+	waitFor(t, func() bool { return s.Stats().Active == 1 })
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	opened := make(chan struct{}, 1)
-	closed := make(chan struct{}, 1)
-	srv, err := tcp.Listen(ctx, "tcp", "127.0.0.1:0", tcp.HandlerFunc(func(context.Context, net.Conn) error {
-		return nil
-	}), tcp.ListenOptions{Server: tcp.Options{
-		OnOpen:  func(context.Context, net.Conn) error { opened <- struct{}{}; return nil },
-		OnClose: func(net.Conn) { closed <- struct{}{} },
-	}})
+	if err := s.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	<-aborted
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("connection not closed on abort")
+	}
+}
+
+func TestServeContextCancelAborts(t *testing.T) {
+	s, err := tcp.Listen(context.Background(), "tcp", "127.0.0.1:0", func(ctx context.Context, _ *tcp.Conn) { <-ctx.Done() }, tcp.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = srv.Serve(ctx) }()
-	conn, err := net.Dial("tcp", srv.Addr().String())
-	if err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- s.Serve(ctx) }()
+	dial(t, s)
+	waitFor(t, func() bool { return s.Stats().Active == 1 })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after cancel")
+	}
+	if err := s.Serve(context.Background()); err != tcp.ErrClosed {
 		t.Fatal(err)
 	}
-	defer conn.Close()
-	select {
-	case <-opened:
-	case <-time.After(time.Second):
-		t.Fatal("OnOpen was not called")
-	}
-	select {
-	case <-closed:
-	case <-time.After(time.Second):
-		t.Fatal("OnClose was not called")
-	}
-	_ = srv.Close()
 }

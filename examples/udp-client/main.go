@@ -1,13 +1,13 @@
+// The UDP client is plain net: go-netx adds nothing a single dialled
+// datagram socket needs.
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"time"
-
-	"github.com/ninepeach/go-netx/udp"
 )
 
 func main() {
@@ -15,16 +15,19 @@ func main() {
 	if len(os.Args) > 1 {
 		message = os.Args[1]
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	client, err := udp.Dial(ctx, "udp", "127.0.0.1:9001", udp.ClientOptions{})
+	conn, err := net.Dial("udp", "127.0.0.1:9001")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
-	response, err := client.Exchange(ctx, []byte(message))
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write([]byte(message)); err != nil {
+		log.Fatal(err)
+	}
+	in := make([]byte, 65535)
+	n, err := conn.Read(in)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(string(response))
+	fmt.Println(string(in[:n]))
 }

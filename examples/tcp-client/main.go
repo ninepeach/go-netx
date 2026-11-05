@@ -18,7 +18,10 @@ func main() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	conn, err := tcp.Dial(ctx, "tcp", "127.0.0.1:9000")
+	dialer := tcp.NewDialer(tcp.DialOptions{OnDial: func(e tcp.DialEvent) {
+		log.Printf("dial %s took %s err=%v", e.Address, e.Duration, e.Err)
+	}})
+	conn, err := dialer.DialContext(ctx, "tcp", "127.0.0.1:9000")
 	if err != nil {
 		log.Fatal(err)
 	}
