@@ -155,10 +155,6 @@ func TestUnsupportedOptionsAreExplicitOnDarwin(t *testing.T) {
 			name: "TCP Fast Open",
 			opts: socket.Options{FastOpen: socket.FastOpenOptions{Enabled: true}},
 		},
-		{
-			name: "SO_REUSEPORT",
-			opts: socket.Options{ReusePort: true},
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lc := socket.ListenConfig(tc.opts)

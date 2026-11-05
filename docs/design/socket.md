@@ -17,7 +17,7 @@ Overall design: [ARCHITECTURE.md](../../ARCHITECTURE.md).
 ```go
 type Options struct {
     FastOpen   FastOpenOptions // TCP only; Enabled, Backlog, Unsupported policy
-    ReusePort  bool            // Linux
+    ReusePort  bool            // Linux, FreeBSD (balanced); macOS (no balancing)
     RecvBuffer, SendBuffer int // SO_RCVBUF / SO_SNDBUF when > 0
     KeepAlive  KeepAlive       // Disable, Idle, Interval, Count; zero = Go default
 }
@@ -43,13 +43,26 @@ fields left at zero keep Go's defaults. The zero value changes nothing
 connections because Go applies `ListenConfig.KeepAliveConfig` on accept.
 
 **Unsupported options.** A requested feature the platform lacks is an
-explicit `*UnsupportedOptionError` (FastOpen and ReusePort off Linux;
-buffer sizes off unix/windows), never a silent no-op.
-`UnsupportedIgnore` applies only to errors that mean "not supported"
-(`ENOPROTOOPT`, `EOPNOTSUPP` on Linux); any other setsockopt error is
-returned unchanged (REG-01).
+explicit `*UnsupportedOptionError`, never a silent no-op: FastOpen off
+Linux, ReusePort outside Linux/FreeBSD/macOS, buffer sizes outside
+unix/Windows. `UnsupportedIgnore` (FastOpen only, kept by D-13) applies
+only to errors that mean "not supported" (`ENOPROTOOPT`, `EOPNOTSUPP` on
+Linux); any other setsockopt error is returned unchanged (REG-01).
 
-Options that make no sense for a socket type are skipped: FastOpen for UDP.
+**Options that do not fit the network are refused (D-14).** Any option on a
+network other than TCP or UDP (for example `unix`), and the TCP-only
+options (FastOpen, KeepAlive) on UDP, return `*UnsupportedOptionError` with
+`Platform` set to `"network <name>"`. This is a configuration error, so
+`UnsupportedIgnore` does not cover it. The zero `Options` works on every
+network. A gateway configuring TCP and UDP therefore uses two `Options`
+values when it sets TCP-only options.
+
+**ReusePort per platform (D-15).** Linux uses `SO_REUSEPORT` and FreeBSD
+`SO_REUSEPORT_LB` (12+); both spread connections and datagrams across the
+sockets. macOS accepts `SO_REUSEPORT` but does not spread load: one socket
+receives everything. It is supported so a development Mac runs the
+production configuration; do not expect several UDP readers to share work
+there.
 
 ## 4. Platform notes
 
@@ -57,21 +70,24 @@ Options that make no sense for a socket type are skipped: FastOpen for UDP.
 |---|---|---|---|
 | RecvBuffer / SendBuffer | ✓ (kernel doubles the value) | ✓ | ✓ |
 | KeepAlive idle/interval/count | ✓ | ✓ (Go's support) | ✓ (Go's support) |
-| ReusePort | ✓ | unsupported error | unsupported error |
+| ReusePort | ✓ balanced | macOS ✓ not balanced; FreeBSD ✓ balanced (`SO_REUSEPORT_LB`); other BSDs unsupported error | unsupported error |
 | FastOpen | ✓ | policy | policy |
 
 ## 5. Decisions
 
-- One `Options` struct shared by TCP and UDP, so a gateway configures
-  sockets the same way everywhere.
-- ReusePort is reported unsupported off Linux even where `SO_REUSEPORT`
-  exists (macOS does not load-balance with it), rather than appearing to
-  work and silently not spreading load.
+- One `Options` type for TCP and UDP, so a gateway configures sockets the
+  same way everywhere; a value that sets TCP-only options is for TCP only
+  (D-14).
+- D-13: keep `UnsupportedIgnore` for FastOpen.
+- D-14: options that do not fit the network are errors.
+- D-15: ReusePort on macOS (documented as unbalanced) and FreeBSD (balanced).
 
 ## 6. Testing
 
-SOCK-01…SOCK-16 in [docs/TESTING.md](../TESTING.md). Option effects are
+SOCK-01…SOCK-21 in [docs/TESTING.md](../TESTING.md). Option effects are
 verified with `getsockopt` on Linux (and macOS for buffer inheritance).
+SOCK-20/21 (macOS, FreeBSD reuse-port) are written but have only been
+compiled so far.
 
 ## 7. Open items
 

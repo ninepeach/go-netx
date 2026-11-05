@@ -27,7 +27,12 @@ type FastOpenOptions struct {
 // Options contains portable socket configuration. Platform-specific features
 // follow the policy configured by the caller.
 type Options struct {
-	FastOpen  FastOpenOptions
+	FastOpen FastOpenOptions
+	// ReusePort lets several sockets bind the same address. Linux and
+	// FreeBSD (SO_REUSEPORT_LB) spread incoming connections and datagrams
+	// across them; macOS allows the binding but does not spread load, so
+	// one socket receives everything. Other platforms return an
+	// UnsupportedOptionError.
 	ReusePort bool
 	// RecvBuffer and SendBuffer set SO_RCVBUF and SO_SNDBUF in bytes when
 	// positive, before bind. The kernel may round or cap them. On a TCP
@@ -92,7 +97,9 @@ func SetBuffers(c BufferSetter, opts Options) error {
 	return nil
 }
 
-// UnsupportedError reports that a requested option is unavailable.
+// UnsupportedOptionError reports that a requested option is unavailable:
+// Platform is the operating system, or "network <name>" when the option
+// does not apply to that kind of socket.
 type UnsupportedOptionError struct {
 	Option   string
 	Platform string
@@ -127,23 +134,41 @@ func Dialer(base net.Dialer, opts Options) net.Dialer {
 
 func control(opts Options, outbound bool) func(string, string, syscall.RawConn) error {
 	return func(network, _ string, raw syscall.RawConn) error {
-		isTCP := network == "tcp" || network == "tcp4" || network == "tcp6"
-		isUDP := network == "udp" || network == "udp4" || network == "udp6"
-		if !isTCP && !isUDP {
-			return nil
+		if err := checkNetwork(network, opts); err != nil {
+			return err
 		}
-		options := opts
-		if !isTCP {
-			options.FastOpen = FastOpenOptions{}
+		if opts == (Options{}) {
+			return nil
 		}
 		var applyErr error
 		if err := raw.Control(func(fd uintptr) {
-			if applyErr = applyBuffers(fd, options); applyErr == nil {
-				applyErr = applyOptions(fd, options, outbound)
+			if applyErr = applyBuffers(fd, opts); applyErr == nil {
+				applyErr = applyOptions(fd, opts, outbound)
 			}
 		}); err != nil {
 			return err
 		}
 		return applyErr
 	}
+}
+
+// checkNetwork refuses options that cannot apply to the network instead of
+// dropping them silently: any option on a network other than TCP or UDP,
+// and the TCP-only options (Fast Open, keep-alive) on UDP. This is a
+// configuration error, so UnsupportedIgnore does not cover it.
+func checkNetwork(network string, o Options) error {
+	isTCP := network == "tcp" || network == "tcp4" || network == "tcp6"
+	isUDP := network == "udp" || network == "udp4" || network == "udp6"
+	where := "network " + network
+	switch {
+	case !isTCP && !isUDP:
+		if o != (Options{}) {
+			return &UnsupportedOptionError{Option: "socket options", Platform: where}
+		}
+	case isUDP && o.FastOpen.Enabled:
+		return &UnsupportedOptionError{Option: "TCP Fast Open", Platform: where}
+	case isUDP && !o.KeepAlive.IsZero():
+		return &UnsupportedOptionError{Option: "TCP keep-alive", Platform: where}
+	}
+	return nil
 }
