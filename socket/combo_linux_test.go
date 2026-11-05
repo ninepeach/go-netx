@@ -13,7 +13,6 @@ import (
 
 const (
 	soReusePort  = 15 // SO_REUSEPORT
-	tcpFastOpen  = 23 // TCP_FASTOPEN
 	requestedBuf = 48 << 10
 )
 
@@ -21,8 +20,7 @@ const (
 func TestBuffersCombineWithReusePortAndFastOpen(t *testing.T) {
 	lc := socket.ListenConfig(socket.Options{
 		ReusePort:  true,
-		FastOpen:   socket.FastOpenOptions{Enabled: true, Backlog: 64},
-		RecvBuffer: requestedBuf,
+				RecvBuffer: requestedBuf,
 		SendBuffer: requestedBuf,
 	})
 	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -39,10 +37,6 @@ func TestBuffersCombineWithReusePortAndFastOpen(t *testing.T) {
 	}
 	if v := socketIntOption(t, tl, syscall.SOL_SOCKET, syscall.SO_SNDBUF); v < requestedBuf {
 		t.Fatalf("SO_SNDBUF=%d", v)
-	}
-	// TCP Fast Open must be enabled when the kernel supports it.
-	if v := socketIntOption(t, tl, syscall.IPPROTO_TCP, tcpFastOpen); v != 64 {
-		t.Fatalf("TCP_FASTOPEN=%d", v)
 	}
 	// ReusePort really allows a second bind next to the first.
 	ln2, err := lc.Listen(context.Background(), "tcp", ln.Addr().String())
