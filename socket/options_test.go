@@ -155,16 +155,38 @@ func TestUnsupportedOptionsAreExplicitOnDarwin(t *testing.T) {
 			name: "TCP Fast Open",
 			opts: socket.Options{FastOpen: socket.FastOpenOptions{Enabled: true}},
 		},
-		{
-			name: "SO_REUSEPORT",
-			opts: socket.Options{ReusePort: true},
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			lc := socket.ListenConfig(tc.opts)
 			_, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 			if err == nil || !socket.IsUnsupported(err) {
 				t.Fatalf("expected explicit unsupported-option error, got %v", err)
+			}
+		})
+	}
+}
+
+
+// Checks: SOCK-17
+func TestRejectsIncompatibleNetworkOptions(t *testing.T) {
+	tests := []struct {
+		name, network, address string
+		opts                  socket.Options
+	}{
+		{
+			name: "Fast Open on UDP", network: "udp", address: "127.0.0.1:0",
+			opts: socket.Options{FastOpen: socket.FastOpenOptions{Enabled: true}},
+		},
+		{
+			name: "ReusePort on Unix socket", network: "unix", address: t.TempDir() + "/sock",
+			opts: socket.Options{ReusePort: true},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := socket.ListenConfig(tc.opts).Listen(context.Background(), tc.network, tc.address)
+			if err == nil {
+				t.Fatal("expected incompatible socket option to fail")
 			}
 		})
 	}
