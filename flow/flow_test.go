@@ -184,7 +184,7 @@ func TestGetOrOpenConcurrentSingleCreation(t *testing.T) {
 // A clock advanced by a future Sweep must not move backwards on a stale Sweep.
 func TestSweepClockNeverMovesBackward(t *testing.T) {
 	tb := NewTable(TableOptions[int, int]{IdleTimeout: 20 * time.Second})
-	f, _ := tb.GetOrOpen(1, nil)
+	tb.GetOrOpen(1, nil)
 	future := time.Now().Add(10 * time.Second)
 	if got := tb.Sweep(future); got != 0 {
 		t.Fatalf("first sweep evicted fresh flow: %d", got)
