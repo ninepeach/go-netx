@@ -20,7 +20,7 @@ const (
 func TestBuffersCombineWithReusePort(t *testing.T) {
 	lc := socket.ListenConfig(socket.Options{
 		ReusePort:  true,
-				RecvBuffer: requestedBuf,
+		RecvBuffer: requestedBuf,
 		SendBuffer: requestedBuf,
 	})
 	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
