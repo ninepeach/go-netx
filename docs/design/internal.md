@@ -12,6 +12,17 @@ more than one public package needs it or because it must stay hidden.
 | `EnableDropCount(RawConn) bool`, `DropCount(oob) (uint32, bool)`, `OOBSize` | Linux `SO_RXQ_OVFL`: enable it, parse the count from control data |
 | `ClassifyRead(error) ReadErr` | Transient, Truncated or Fatal, per platform |
 
+| `BatchReader` (`NewBatchReader`, `Read`, `Message`), `BatchSupported`, `DefaultBatch`, `MaxBatch` | Linux `recvmmsg` into caller-owned buffers; elsewhere a stub and `BatchSupported = false` |
+
+- `BatchReader` owns one `mmsghdr`, iovec, sockaddr and control slot per
+  buffer, built once. `Read` runs `recvmmsg` through `RawConn.Read`, so it
+  waits on the Go poller (EAGAIN returns false), retries EINTR, and is
+  woken by Close; the read callback is a method value built in the
+  constructor, so a call does not allocate. The address and control
+  lengths are reset before every call because the kernel overwrites them.
+  Sockaddrs are decoded without allocating; IPv4-mapped addresses are
+  unmapped and an IPv6 scope ID becomes the interface name (the number when
+  unknown), cached per reader.
 - `DropCount` walks `cmsghdr` records with fixed offsets and `unsafe`, without
   allocating; it rejects truncated buffers and lengths that point outside
   the buffer. It parses kernel data, so it is fuzzed (NF-07).
@@ -22,7 +33,7 @@ more than one public package needs it or because it must stay hidden.
   socket) are transient. The Windows policy is a pure function
   (`classifyWinsock`) compiled and tested on every platform.
 
-Checkpoints: SYS-01…SYS-04, UDP-08, UDP-30, NF-07.
+Checkpoints: SYS-01…SYS-06, UDP-08, UDP-30, NF-07.
 
 ## internal/backoff — retry delay shared by TCP and UDP
 

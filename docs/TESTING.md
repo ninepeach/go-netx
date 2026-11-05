@@ -173,6 +173,11 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | UDP-13 | P2 | `Readers` 为 0 时取默认值、为负数时拒绝；不设上限（D-01） | ✅ | `udp.ListenOptionBoundaries` | 上限按 D-01 交给调用方 |
 | UDP-14 | P2 | `MaxPacket` 为 0 时取默认值、为负数时拒绝、超过 `MaxDatagram` 时拒绝 | ✅ | `udp.ListenOptionBoundaries`<br>`udp.MaxPacketBound` | 0 和负数、上限都已覆盖 |
 | UDP-15 | P2 | 读循环的 handler 路径零分配 | ✅ | `udp.HandlerDoesNotAllocate` |  |
+| UDP-32 | P0 | 排队的一批数据报（来自两个发送方，超过一个 batch）全部交给 handler，每个发送方内部顺序、内容、来源地址都正确，统计一致 | ✅ | `udp.BurstFromTwoSendersDeliveredInOrder` | Linux 上走 recvmmsg（默认 Batch 8），其他平台走单包读取 |
+| UDP-33 | P1 | `Batch` 为 0 时取默认值、为负数时拒绝；Linux 上 2…1024 可用、超过 1024 拒绝；不支持 recvmmsg 的平台上 `Batch` 大于 1 时报错，不静默回退 | ✅ | `udp.BatchOptionBoundaries` | 按平台分别断言 |
+| UDP-34 | P1 | `Batch: 1` 走单包读取路径，同样零分配 | ✅ | `udp.HandlerDoesNotAllocate` |  |
+| UDP-35 | P1 | 一批中间夹着超过 `MaxPacket` 的数据报时，只丢弃并计数这一个，前后的照常交付 | ✅ | `udp.TruncatedInsideBurst` |  |
+| UDP-36 | P1 | 批量读取时内核丢包计数仍然生效 | ✅ | `udp.KernelDropsCountedWithBatch` | 仅 Linux |
 
 ### 4.2 发送与 Reply
 
@@ -336,6 +341,8 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SYS-02 | P1 | Windows 上的错误分类 | ✅ | `sys.ClassifyWinsock` | 策略写成纯函数，在所有平台上测试；Windows 上的实际读取路径未运行 |
 | SYS-03 | P1 | `DropCount` 解析正确且零分配 | ✅ | `sys.DropCountDoesNotAllocate`<br>`sys.DropCountParse` | 仅 Linux |
 | SYS-04 | P1 | `counter.Max` 在并发下单调不减 | ✅ | `counter.CounterMaxConcurrent`<br>`counter.CounterOperations` |  |
+| SYS-05 | P0 | `BatchReader` 一次调用返回已排队的全部数据报（不等凑满），超过批量时分多次读出且顺序不变；每个数据报的长度、截断标志、来源地址、丢包计数各自正确；Close 能唤醒阻塞的 Read；Read 不分配内存 | ✅ | `sys.BatchReaderDoesNotAllocate`<br>`sys.BatchReaderReadsQueuedDatagrams` | 仅 Linux |
+| SYS-06 | P1 | sockaddr 解析：IPv4、IPv6、IPv4 映射地址还原、链路本地地址的 zone（接口名，未知接口用数字）、未知地址族 | ✅ | `sys.BatchReaderAddressParsing` | 仅 Linux；用构造的 sockaddr 测试，当前环境没有 IPv6 网络 |
 | OBS-01 | P0 | TCP Stats：Accepted、Active、Closed、Rejected | ✅ | `tcp.AdmitRejects`<br>`tcp.EchoAndStats` |  |
 | OBS-02 | P1 | TCP Stats：AcceptErrors | ✅ | `tcp.TemporaryAcceptErrorsBackOffAndStopPromptly` |  |
 | OBS-03 | P0 | UDP Stats：收发的包数和字节数 | ✅ | `udp.Echo` |  |
@@ -426,6 +433,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-14 | 选项不适用于当前网络类型时一律报错 | 在 unix 等网络上设置选项、在 UDP 上设置 FastOpen 或 KeepAlive，都属于配置错误，不再静默忽略，也不受 `UnsupportedIgnore` 影响。代价：TCP 和 UDP 不能再共用一份带 TCP 专属选项的 `socket.Options` |
 | D-15 | macOS 支持 ReusePort，FreeBSD 使用 `SO_REUSEPORT_LB` | macOS 允许多个 socket 绑定同一端口，但不分流，只有一个能收到数据；支持它是为了让同一份配置能在 Mac 开发机上运行，文档中写明不分流。FreeBSD 的 `SO_REUSEPORT_LB` 与 Linux 一样分流 |
 | D-16 | 缓冲区小于请求值时报错，不只报告 | 内核截断缓冲区时不报错（Linux 截到 rmem_max），网关会带着比设计小的缓冲区运行，直到高峰期丢包才发现。启动时报错，并提示调大 sysctl 或授予 CAP_NET_ADMIN，与“不静默忽略”的原则一致。代价：默认配置的机器上，请求大缓冲区会启动失败 |
+| D-17 | Linux 上默认用 recvmmsg 批量读取（`Batch` 默认 8） | 实测有积压时每个数据报的接收开销降低约 44%，且不增加延迟（不等凑满）。代价是每个 reader 的内存变为 Batch × MaxPacket，默认约 520KB；小包网关应设置 MaxPacket。32 比 8 提升很小但内存翻 4 倍，所以默认取 8 |
 
 ## 12.1 文档一致性
 
@@ -451,6 +459,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | NF-10 | Fuzz | Queue 的随机操作序列与模型一致：FIFO、容量、溢出策略、Stats | ✅ | `queue.FuzzRingOps` | 种子语料随 `go test` 运行；`make fuzz` 对每个目标做长时间 fuzz |
 | NF-11 | Fuzz | Buf 的随机 Get/Release 序列：预算与持有量一致，内存不共享 | ✅ | `buf.FuzzGetRelease` | 种子语料随 `go test` 运行；`make fuzz` 对每个目标做长时间 fuzz |
 | NF-12 | Bench | UDP 回显 | ✅ | `udp.BenchmarkEcho` | 约 10µs，0 次分配 |
+| NF-22 | Bench | UDP 接收（队列中有积压时每个数据报的接收开销），按 Batch 1、8、32 对比 | ✅ | `udp.BenchmarkRecv` | 2 vCPU：Batch 1 约 2.2µs，Batch 8 约 1.2µs，0 次分配 |
 | NF-13 | Bench | TCP accept 吞吐 | ✅ | `tcp.BenchmarkAccept` | 实测约 79µs/连接（建立、接受、关闭），23 次分配 |
 | NF-14 | Bench | 不同 flow 数量下的查找和清扫 | ✅ | `flow.BenchmarkGetAddrPort`<br>`flow.BenchmarkGetBySize`<br>`flow.BenchmarkSweepBySize` | `flow.BenchmarkGetBySize`、`flow.BenchmarkSweepBySize` |
 | NF-15 | Bench | Queue | ✅ | `queue.BenchmarkPushPop` |  |

@@ -2,6 +2,16 @@
 
 ## v2.0.0 (unreleased)
 
+### Added
+
+- udp: `Options.Batch` receives up to that many queued datagrams per system
+  call with Linux `recvmmsg` (default 8 on Linux, 1 elsewhere, max 1024).
+  Under load the receive cost per datagram drops from about 2.2µs to
+  1.2µs (2 vCPU), with no added latency and 0 allocations; the handler
+  contract is unchanged. Memory per reader becomes `Batch × MaxPacket`
+  (about 520KB with the defaults); set `MaxPacket` for small datagrams.
+  `Batch` > 1 where `recvmmsg` is unavailable is an error.
+
 ### Changed
 
 - `socket`: remove `UnsupportedPolicy` and `UnsupportedIgnore`.

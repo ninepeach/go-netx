@@ -24,7 +24,8 @@ type Packet struct {
 }
 type Options struct {
     Readers   int // default 1; with ReusePort, one socket each
-    MaxPacket int // receive buffer per reader; default and max MaxDatagram
+    MaxPacket int // size of each receive buffer; default and max MaxDatagram
+    Batch     int // datagrams per recvmmsg; Linux default 8, max 1024; 1 elsewhere
     Socket    socket.Options
 }
 const MaxDatagram = 65000 // size limit for sends and receives
@@ -41,9 +42,28 @@ var ErrClosed, ErrTooLarge, ErrNilPacket
 ## 3. Design
 
 **No goroutine, allocation or queue per datagram.** Each reader goroutine
-owns one `MaxPacket` buffer, allocated once, and calls the handler inline.
-`Packet` is reused; `From` uses `netip.AddrPort`, which needs no allocation.
-Concurrency comes from `Readers`, not from goroutines per packet.
+owns `Batch` buffers of `MaxPacket` bytes, allocated once, and calls the
+handler inline. `Packet` is reused; `From` uses `netip.AddrPort`, which
+needs no allocation. Concurrency comes from `Readers`, not from goroutines
+per packet.
+
+**Batched reads (Linux, D-17).** With `Batch` > 1 a reader calls
+`recvmmsg` (`internal/sys.BatchReader`), which returns up to `Batch`
+datagrams already queued. It never waits for the batch to fill, so a
+lone datagram is delivered as soon as it arrives; batching only helps when
+datagrams queue up, which is exactly when receive cost matters. The
+handler is still called once per datagram, in arrival order, and
+`Packet.Data` points into that datagram's buffer, which is reused only on
+the next system call, after every handler of the batch has returned. Each
+slot has its own address and control buffer, so `From`, `Truncated` and
+`KernelDrops` work per datagram as with one read. `Batch: 1` keeps the
+single `ReadMsgUDPAddrPort` loop. Platforms without `recvmmsg` default to
+1, and an explicit `Batch` > 1 there is an error rather than a silent
+fallback. Memory per reader is `Batch × MaxPacket`: about 520KB with the
+defaults (8 × 65000), 16KB with `MaxPacket: 2048`, so a gateway with
+small datagrams should set `MaxPacket`. Link-local IPv6 senders get their
+zone from the interface name, looked up once per interface and cached per
+reader.
 
 **Readers and sockets.** With `ReusePort`, `Listen` binds one socket per
 reader to the same resolved port (`:0` works); the kernel hashes each
@@ -87,22 +107,41 @@ through a bounded queue. Panics are not recovered.
 SendErrors, KernelDrops, KernelDropsEnabled (false means "not measured",
 not "no drops"). Counters are padded per reader and per socket.
 
-## 6. Performance (2 vCPU, loopback, 512B)
+## 6. Performance (2 vCPU, Linux 6.18, Go 1.24, loopback)
 
-Echo round trip about 10–11µs with 0 allocations (`BenchmarkEcho`), against
-32.5µs and 5 allocations in v0.2.
+Echo round trip (512B) about 10–12µs with 0 allocations (`BenchmarkEcho`),
+against 32.5µs and 5 allocations in v0.2; batching does not change it,
+since an echo has one datagram in flight.
+
+Receive cost per datagram with a queue to drain (`BenchmarkRecv`: the
+handler holds the reader while 256 datagrams queue, then the reader drains
+them; median of 5 runs, 0 allocations in every case):
+
+| Batch | 64B | 1200B |
+|---|---|---|
+| 1 (v1.1 behaviour) | 2176 ns | 2373 ns |
+| 8 (Linux default) | 1210 ns | 1302 ns |
+| 32 | 1156 ns | 1233 ns |
+
+Batching saves more than the bare system call (measured −34% for
+recvmmsg vs recvmsg in C-like Go code) because the Go poller and
+scheduler work per read is spread over the batch too. 32 adds little over
+8 for its 4× memory, which is why the default is 8.
 
 ## 7. Decisions
 
 D-01 (`Readers` not capped), D-02 (one limit, 65000, both directions), D-03
-(no handler context).
+(no handler context), D-17 (recvmmsg batching on by default on Linux).
 
 ## 8. Testing
 
-UDP-01…UDP-31, OBS-03…OBS-05, NF-04/08/12 in
+UDP-01…UDP-36, SYS-05/06, OBS-03…OBS-05, NF-04/08/12 in
 [docs/TESTING.md](../TESTING.md). UDP-20 (IPv6) is written but has not
 run on an IPv6 host yet.
 
 ## 9. Open items
 
-- recvmmsg/sendmmsg batching; the API does not change.
+- Sending in batches (GSO `UDP_SEGMENT` or sendmmsg) for media bursts to
+  one peer; see the QUIC research note.
+- PKTINFO, so `Reply` uses the local address the datagram was sent to on
+  multi-homed hosts bound to a wildcard address.

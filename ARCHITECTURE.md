@@ -101,8 +101,10 @@ type Service interface {
 
 ## Transport behaviour
 
-**UDP.** `Options.Readers` goroutines each own one preallocated receive buffer
-and call the handler inline. With `ReusePort` each reader has its own socket
+**UDP.** `Options.Readers` goroutines each own preallocated receive buffers
+and call the handler inline; on Linux each system call receives up to
+`Options.Batch` (default 8) queued datagrams with `recvmmsg`, which roughly
+halves receive cost under load without adding latency. With `ReusePort` each reader has its own socket
 and the kernel pins each flow to one reader (`Packet.Reader`), so gateways can
 shard per-flow state without locks. There is no internal queue: the kernel
 receive buffer is the queue (`socket.Options.RecvBuffer`), and overflows are
