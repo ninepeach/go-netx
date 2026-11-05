@@ -70,8 +70,8 @@ type Stats struct {
 	RecvBytes   uint64
 	SendPackets uint64
 	SendBytes   uint64
-	Truncated   uint64 // received datagrams larger than MaxPacket, dropped
-	RecvErrors  uint64
+	Truncated   uint64 // datagrams larger than MaxPacket, dropped (all platforms)
+	RecvErrors  uint64 // transient errors retried with backoff, plus a final fatal one
 	SendErrors  uint64
 	KernelDrops uint64 // receive queue overflows reported by the kernel (Linux)
 }
@@ -98,6 +98,7 @@ type Conn struct {
 	mu        sync.Mutex
 	serving   bool
 	closed    bool
+	fatal     error         // first unrecoverable read error
 	done      chan struct{} // closed when Serve returns
 	closeOnce sync.Once
 }
@@ -153,7 +154,9 @@ func Listen(ctx context.Context, network, address string, h Handler, o Options) 
 func (c *Conn) LocalAddr() netip.AddrPort { return c.local }
 
 // Serve runs the readers until Shutdown or Close, or until ctx is cancelled,
-// which closes the Conn. It returns after every reader has stopped.
+// which closes the Conn. It returns after every reader has stopped: nil on
+// a requested stop, or the first fatal read error, which also closes the
+// Conn so no reader keeps running on a broken socket.
 func (c *Conn) Serve(ctx context.Context) error {
 	c.mu.Lock()
 	switch {
@@ -181,7 +184,9 @@ func (c *Conn) Serve(ctx context.Context) error {
 		}(i)
 	}
 	wg.Wait()
-	return nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.fatal
 }
 
 func (c *Conn) read(reader, sock int) {
@@ -195,12 +200,9 @@ func (c *Conn) read(reader, sock int) {
 	for {
 		n, oobn, flags, from, err := uc.ReadMsgUDPAddrPort(data, oob)
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
+			if c.readFailed(st, err, &backoff) {
 				return
 			}
-			st.recvErrors.Inc()
-			backoff = min(max(backoff*2, 5*time.Millisecond), time.Second)
-			time.Sleep(backoff)
 			continue
 		}
 		backoff = 0
@@ -219,6 +221,31 @@ func (c *Conn) read(reader, sock int) {
 		p.From = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
 		c.handler(c, p)
 	}
+}
+
+// readFailed handles a read error and reports whether the reader must stop.
+func (c *Conn) readFailed(st *readerStats, err error, backoff *time.Duration) bool {
+	if errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	switch sys.ClassifyRead(err) {
+	case sys.Truncated:
+		st.truncated.Inc()
+		return false
+	case sys.Transient:
+		st.recvErrors.Inc()
+		*backoff = min(max(*backoff*2, 5*time.Millisecond), time.Second)
+		time.Sleep(*backoff)
+		return false
+	}
+	st.recvErrors.Inc()
+	c.mu.Lock()
+	if c.fatal == nil && !c.closed {
+		c.fatal = fmt.Errorf("udp: read: %w", err)
+	}
+	c.mu.Unlock()
+	_ = c.Close()
+	return true
 }
 
 // WriteTo sends b to addr. It is safe for concurrent use and does not

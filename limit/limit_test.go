@@ -80,3 +80,47 @@ func TestBudget(t *testing.T) {
 		t.Fatal("not released")
 	}
 }
+
+func TestBudgetRefusesNegative(t *testing.T) {
+	b := NewBudget(100)
+	if b.Reserve(-100) {
+		t.Fatal("negative reserve accepted")
+	}
+	if b.Reserve(101) || !b.Reserve(0) || b.Used() != 0 {
+		t.Fatal("limit bypassed")
+	}
+	for _, n := range []int64{-1, 1} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("Release(%d) with nothing reserved did not panic", n)
+				}
+			}()
+			b.Release(n)
+		}()
+	}
+}
+
+func TestBudgetParallelNeverExceeds(t *testing.T) {
+	b := NewBudget(1000)
+	var wg sync.WaitGroup
+	var over atomic.Bool
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 2000; j++ {
+				if b.Reserve(64) {
+					if b.Used() > b.Max()+64*32 { // in-flight attempts bounded
+						over.Store(true)
+					}
+					b.Release(64)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if over.Load() || b.Used() != 0 {
+		t.Fatalf("used=%d", b.Used())
+	}
+}

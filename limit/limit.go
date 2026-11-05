@@ -122,8 +122,12 @@ func NewBudget(max int64) *Budget {
 	return &Budget{max: max}
 }
 
-// Reserve takes n units if they fit and reports whether it did.
+// Reserve takes n units if they fit and reports whether it did. Negative n
+// is refused, so Reserve can never raise the remaining capacity.
 func (b *Budget) Reserve(n int64) bool {
+	if n < 0 {
+		return false
+	}
 	if b.used.Add(n) > b.max {
 		b.used.Add(-n)
 		return false
@@ -131,7 +135,15 @@ func (b *Budget) Reserve(n int64) bool {
 	return true
 }
 
-// Release returns n units previously taken with Reserve.
-func (b *Budget) Release(n int64) { b.used.Add(-n) }
-func (b *Budget) Used() int64     { return b.used.Load() }
-func (b *Budget) Max() int64      { return b.max }
+// Release returns n units previously taken with Reserve. Releasing a
+// negative amount, or more than is in use, is a caller bug and panics.
+func (b *Budget) Release(n int64) {
+	if n < 0 {
+		panic("limit: Budget.Release of negative amount")
+	}
+	if b.used.Add(-n) < 0 {
+		panic("limit: Budget.Release of more than reserved")
+	}
+}
+func (b *Budget) Used() int64 { return b.used.Load() }
+func (b *Budget) Max() int64  { return b.max }

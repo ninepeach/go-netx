@@ -92,3 +92,33 @@ func BenchmarkGetAddrPort(b *testing.B) {
 		}
 	})
 }
+
+// An active flow must never be evicted while it keeps being touched, with
+// Run sweeping concurrently.
+func TestActiveFlowSurvivesSweep(t *testing.T) {
+	var evicted atomic.Int32
+	tb := NewTable(TableOptions[int, int]{
+		IdleTimeout: 50 * time.Millisecond,
+		OnClose:     func(int, *Flow[int]) { evicted.Add(1) },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() { tb.Run(ctx); close(runDone) }()
+	tb.GetOrOpen(1, nil)
+	tb.GetOrOpen(2, nil) // never touched again: must be evicted
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, ok := tb.Get(1); !ok {
+			t.Fatal("active flow evicted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, ok := tb.Get(2); ok {
+		t.Fatal("idle flow not evicted")
+	}
+	if evicted.Load() != 1 {
+		t.Fatalf("evicted=%d", evicted.Load())
+	}
+	cancel()
+	<-runDone
+}

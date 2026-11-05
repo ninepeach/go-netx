@@ -89,9 +89,6 @@ func TestReusePortReaders(t *testing.T) {
 }
 
 func TestTruncatedDropped(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("truncation reported as an error on windows")
-	}
 	got := make(chan int, 2)
 	c := start(t, func(_ *udp.Conn, p *udp.Packet) { got <- len(p.Data) }, udp.Options{MaxPacket: 8})
 	cl := dial(t, c)

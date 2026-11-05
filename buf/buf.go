@@ -45,9 +45,14 @@ type Pool struct {
 	budget *limit.Budget
 }
 
-// NewPool returns a pool. If budget is non-nil, buffers in use are charged
-// against it by capacity and Get returns nil when the budget is exhausted.
-// Idle pooled memory is not charged and is reclaimed by the GC.
+// NewPool returns a pool. If budget is non-nil, Get charges each buffer's
+// capacity against it and Release refunds it; Get returns nil when the
+// budget is exhausted.
+//
+// The budget therefore caps in-use buffer memory only. Released buffers may
+// stay in the pool (sync.Pool) until the GC reclaims them, so retained pool
+// memory and total process memory can exceed the budget. Use the budget to
+// bound how much data the gateway holds at once, not as a process RSS limit.
 func NewPool(budget *limit.Budget) *Pool {
 	p := &Pool{budget: budget}
 	for i := range classes {

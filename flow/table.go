@@ -63,15 +63,18 @@ func (t *Table[K, V]) shard(k K) *shard[K, V] {
 	return &t.shards[maphash.Comparable(t.seed, k)&t.mask]
 }
 
-// Get returns the flow for k and marks it as seen.
+// Get returns the flow for k and marks it as seen. The touch happens under
+// the shard lock, so Sweep cannot evict a flow between lookup and touch.
+// A returned flow can still be closed later by Remove, Sweep or Close;
+// check State before relying on it.
 func (t *Table[K, V]) Get(k K) (*Flow[V], bool) {
 	s := t.shard(k)
 	s.mu.Lock()
 	f, ok := s.m[k]
-	s.mu.Unlock()
 	if ok {
 		f.lastSeen.Store(t.now.Load())
 	}
+	s.mu.Unlock()
 	return f, ok
 }
 
@@ -89,8 +92,8 @@ func (t *Table[K, V]) GetOrOpen(k K, newValue func() V) (f *Flow[V], created boo
 		f = New(v)
 		s.m[k] = f
 	}
-	s.mu.Unlock()
 	f.lastSeen.Store(t.now.Load())
+	s.mu.Unlock()
 	return f, !ok
 }
 
