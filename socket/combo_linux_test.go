@@ -72,7 +72,6 @@ func TestZeroAndNegativeBuffersAreNotApplied(t *testing.T) {
 	}
 }
 
-
 // Checks: SOCK-05
 func TestFastOpenAppliesOrReturnsUnsupported(t *testing.T) {
 	lc := socket.ListenConfig(socket.Options{
