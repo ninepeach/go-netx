@@ -110,7 +110,10 @@ func TestTruncatedDropped(t *testing.T) {
 
 func TestWriteTooLarge(t *testing.T) {
 	c := start(t, echo, udp.Options{MaxPacket: 8})
-	if err := c.WriteTo(make([]byte, 9), c.LocalAddr()); err != udp.ErrTooLarge {
+	if err := c.WriteTo(make([]byte, 100), c.LocalAddr()); err != nil {
+		t.Fatal("MaxPacket must not limit sends:", err)
+	}
+	if err := c.WriteTo(make([]byte, udp.MaxDatagram+1), c.LocalAddr()); err != udp.ErrTooLarge {
 		t.Fatal(err)
 	}
 }

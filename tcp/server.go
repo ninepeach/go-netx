@@ -46,7 +46,9 @@ type Handler func(ctx context.Context, c *Conn)
 type Options struct {
 	// Admit is consulted for every accepted connection; rejected
 	// connections are closed immediately and counted. Nil admits all.
-	Admit  limit.Limiter
+	Admit limit.Limiter
+	// Socket applies to the listener created by Listen; accepted
+	// connections inherit its buffer sizes. NewServer ignores it.
 	Socket socket.Options
 }
 
@@ -189,9 +191,6 @@ func (s *Server) serveConn(c *Conn) {
 	defer s.release(c)
 	defer s.untrack(c)
 	defer c.Close()
-	if tc, ok := c.Conn.(*net.TCPConn); ok {
-		_ = socket.SetBuffers(tc, s.opts.Socket)
-	}
 	s.handler(s.ctx, c)
 }
 

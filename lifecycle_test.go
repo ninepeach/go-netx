@@ -170,3 +170,25 @@ func TestGroupWithRealTransports(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestOnStopGetsFreshContext(t *testing.T) {
+	s := netx.NewServer(slowDrain{})
+	s.ShutdownTimeout = 20 * time.Millisecond
+	var stopErr error
+	s.OnStop = func(ctx context.Context) error { stopErr = ctx.Err(); return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.LoopContext(ctx)
+	if stopErr != nil {
+		t.Fatalf("OnStop got an expired context: %v", stopErr)
+	}
+}
+
+// slowDrain uses up the whole shutdown budget.
+type slowDrain struct{}
+
+func (slowDrain) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
+func (slowDrain) Shutdown(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}

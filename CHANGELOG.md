@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.0.1
+
+Fixes from a module-by-module review. No API removals.
+
+- netx: `OnStop` gets its own `ShutdownTimeout` budget instead of the
+  drain's possibly expired context.
+- netx: in `Loop`, a second signal during the drain aborts immediately.
+- flow: `Sweep` advances the table clock, so tables swept by hand without
+  `Run` no longer evict actively touched flows. Sweep cost is documented.
+- udp: `Stats.KernelDrops` accumulates the kernel's 32-bit counter across
+  wraparound instead of freezing at 2^32.
+- udp: `MaxPacket` only sizes the receive buffer; sends are limited by the
+  new `udp.MaxDatagram` (65527).
+- socket/tcp/udp: `RecvBuffer` and `SendBuffer` are applied before bind.
+  TCP listeners pass them to accepted connections, so there are no
+  per-connection syscalls and window scaling sees the larger buffer.
+
 ## v1.0.0
 
 Rewrite around the frozen package layout in ARCHITECTURE.md. Not compatible

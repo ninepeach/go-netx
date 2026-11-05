@@ -122,3 +122,20 @@ func TestActiveFlowSurvivesSweep(t *testing.T) {
 	cancel()
 	<-runDone
 }
+
+// Without Run, a hand-driven Sweep must still see touches as fresh.
+func TestManualSweepKeepsTouchedFlow(t *testing.T) {
+	tb := NewTable(TableOptions[int, int]{IdleTimeout: time.Second})
+	tb.GetOrOpen(1, nil)
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		now = now.Add(600 * time.Millisecond) // 3s total, beyond IdleTimeout
+		tb.Get(1)                             // touched every interval
+		if tb.Sweep(now) != 0 {
+			t.Fatalf("touched flow evicted at step %d", i)
+		}
+	}
+	if tb.Sweep(now.Add(2*time.Second)) != 1 {
+		t.Fatal("idle flow not evicted")
+	}
+}

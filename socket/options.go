@@ -29,8 +29,9 @@ type Options struct {
 	FastOpen  FastOpenOptions
 	ReusePort bool
 	// RecvBuffer and SendBuffer set SO_RCVBUF and SO_SNDBUF in bytes when
-	// positive. The kernel may round or cap them. Transports apply them with
-	// SetBuffers after the socket exists.
+	// positive, before bind. The kernel may round or cap them. On a TCP
+	// listener they are inherited by every accepted connection, and setting
+	// them before listen lets TCP window scaling take them into account.
 	RecvBuffer int
 	SendBuffer int
 }
@@ -41,7 +42,8 @@ type BufferSetter interface {
 	SetWriteBuffer(int) error
 }
 
-// SetBuffers applies RecvBuffer and SendBuffer to c.
+// SetBuffers applies RecvBuffer and SendBuffer to an existing connection,
+// for sockets not created through ListenConfig or Dialer.
 func SetBuffers(c BufferSetter, opts Options) error {
 	if opts.RecvBuffer > 0 {
 		if err := c.SetReadBuffer(opts.RecvBuffer); err != nil {
@@ -98,7 +100,9 @@ func control(opts Options, outbound bool) func(string, string, syscall.RawConn) 
 		}
 		var applyErr error
 		if err := raw.Control(func(fd uintptr) {
-			applyErr = applyOptions(fd, options, outbound)
+			if applyErr = applyBuffers(fd, options); applyErr == nil {
+				applyErr = applyOptions(fd, options, outbound)
+			}
 		}); err != nil {
 			return err
 		}

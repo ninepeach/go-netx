@@ -149,8 +149,15 @@ func (t *Table[K, V]) Range(fn func(K, *Flow[V]) bool) {
 }
 
 // Sweep evicts flows idle longer than IdleTimeout as of now and returns how
-// many it evicted. Run calls it periodically.
+// many it evicted. It also advances the table clock to now, so touches made
+// after a manual Sweep are recorded at the new time; without that, a table
+// swept by hand instead of by Run would see every flow as idle. Run calls
+// Sweep periodically.
+//
+// Sweep visits every flow, holding one shard lock at a time: cost grows
+// linearly with the table size (roughly 20ms per million flows).
 func (t *Table[K, V]) Sweep(now time.Time) int {
+	t.advance(now.UnixNano())
 	if t.idle <= 0 {
 		return 0
 	}
@@ -194,8 +201,17 @@ func (t *Table[K, V]) Run(ctx context.Context) error {
 			t.Close()
 			return nil
 		case now := <-ticker.C:
-			t.now.Store(now.UnixNano())
 			t.Sweep(now)
+		}
+	}
+}
+
+// advance moves the coarse clock forward, never back.
+func (t *Table[K, V]) advance(ns int64) {
+	for {
+		cur := t.now.Load()
+		if ns <= cur || t.now.CompareAndSwap(cur, ns) {
+			return
 		}
 	}
 }
