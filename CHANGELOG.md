@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.0.0 (unreleased)
+
+### Changed
+
+- `socket`: remove the unsupported-option ignore policy. Requested socket
+  options now fail explicitly when unsupported.
+- `socket`: reject TCP Fast Open on non-TCP networks and ReusePort on
+  non-IP sockets instead of silently discarding the requested option.
+- `socket`: support `SO_REUSEPORT` on macOS.
+
+### Migration
+
+- Remove the `Unsupported` field from `FastOpenOptions`. Handle
+  `UnsupportedOptionError` and omit options unavailable on the target
+  platform.
+- Do not configure `FastOpen` for UDP or `ReusePort` for Unix sockets.
+
 ## v1.1.0 (unreleased)
 
 ### Added
