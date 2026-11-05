@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ninepeach/go-netx/internal/backoff"
 	"github.com/ninepeach/go-netx/internal/counter"
 	"github.com/ninepeach/go-netx/limit"
 	"github.com/ninepeach/go-netx/socket"
@@ -150,7 +151,7 @@ func (s *Server) Serve(ctx context.Context) error {
 }
 
 func (s *Server) acceptLoop() error {
-	var backoff time.Duration
+	var delay time.Duration
 	for {
 		nc, err := s.ln.Accept()
 		if err != nil {
@@ -160,14 +161,16 @@ func (s *Server) acceptLoop() error {
 			var temp interface{ Temporary() bool }
 			if errors.As(err, &temp) && temp.Temporary() {
 				s.acceptErrors.Inc()
-				backoff = min(max(backoff*2, 5*time.Millisecond), time.Second)
-				time.Sleep(backoff)
+				delay = backoff.Next(delay)
+				if !backoff.Wait(delay, s.draining) {
+					return nil // stopped while backing off
+				}
 				continue
 			}
 			s.stopAccept()
 			return fmt.Errorf("tcp: accept: %w", err)
 		}
-		backoff = 0
+		delay = 0
 		if s.opts.Admit != nil && !s.opts.Admit.TryAcquire() {
 			s.rejected.Inc()
 			_ = nc.Close()

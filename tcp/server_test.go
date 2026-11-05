@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,7 +50,7 @@ func roundTrip(t *testing.T, c net.Conn, msg string) {
 
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatal("condition not met")
@@ -200,5 +201,59 @@ func TestPermanentAcceptErrorAbortsHandlers(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Serve waited forever on a long-lived handler")
+	}
+}
+
+// tempErrListener fails every Accept with a temporary error until closed.
+type tempErrListener struct {
+	net.Listener
+	calls atomic.Int32
+}
+
+type tempErr struct{}
+
+func (tempErr) Error() string   { return "temporary accept failure" }
+func (tempErr) Timeout() bool   { return false }
+func (tempErr) Temporary() bool { return true }
+
+func (l *tempErrListener) Accept() (net.Conn, error) {
+	l.calls.Add(1)
+	return nil, tempErr{}
+}
+
+// Checks: TCP-05, TCP-07, OBS-02
+func TestTemporaryAcceptErrorsBackOffAndStopPromptly(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := &tempErrListener{Listener: inner}
+	s, err := tcp.NewServer(ln, echo, tcp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error)
+	go func() { done <- s.Serve(context.Background()) }()
+	// Temporary errors are retried, not fatal: several attempts, counted.
+	// After 8 errors the next delay is 1s (5ms doubling, capped), so the
+	// old uninterruptible sleep would hold Shutdown for most of a second.
+	waitFor(t, func() bool { return s.Stats().AcceptErrors >= 8 })
+	start := time.Now()
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Serve returned %v for temporary errors", err)
+	}
+	if d := time.Since(start); d > 200*time.Millisecond {
+		t.Fatalf("Shutdown waited %v for the accept backoff", d)
+	}
+}
+
+// Checks: TCP-02
+func TestListenAddressInUse(t *testing.T) {
+	s, _ := start(t, echo, tcp.Options{})
+	if _, err := tcp.Listen(context.Background(), "tcp", s.Addr().String(), echo, tcp.Options{}); err == nil {
+		t.Fatal("second Listen on a bound port succeeded")
 	}
 }

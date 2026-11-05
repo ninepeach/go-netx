@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ninepeach/go-netx/internal/backoff"
 	"github.com/ninepeach/go-netx/internal/counter"
 	"github.com/ninepeach/go-netx/internal/sys"
 	"github.com/ninepeach/go-netx/socket"
@@ -274,7 +275,7 @@ func (c *Conn) read(reader, sock int) {
 }
 
 // readFailed handles a read error and reports whether the reader must stop.
-func (c *Conn) readFailed(st *readerStats, err error, backoff *time.Duration) bool {
+func (c *Conn) readFailed(st *readerStats, err error, delay *time.Duration) bool {
 	if errors.Is(err, net.ErrClosed) {
 		return true
 	}
@@ -284,15 +285,9 @@ func (c *Conn) readFailed(st *readerStats, err error, backoff *time.Duration) bo
 		return false
 	case sys.Transient:
 		st.recvErrors.Inc()
-		*backoff = min(max(*backoff*2, 5*time.Millisecond), time.Second)
-		timer := time.NewTimer(*backoff)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-			return false
-		case <-c.closing:
-			return true // Close during backoff: stop now, not after it
-		}
+		*delay = backoff.Next(*delay)
+		// Close during the backoff stops the reader now, not after it.
+		return !backoff.Wait(*delay, c.closing)
 	}
 	st.recvErrors.Inc()
 	c.mu.Lock()

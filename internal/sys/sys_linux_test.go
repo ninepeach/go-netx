@@ -37,3 +37,17 @@ func TestDropCountParse(t *testing.T) {
 		t.Fatal("trusted oversized length")
 	}
 }
+
+// Checks: SYS-03
+func TestDropCountDoesNotAllocate(t *testing.T) {
+	other := cmsg(syscall.SOL_SOCKET, syscall.SCM_TIMESTAMP, make([]byte, 16))
+	buf := append(other, cmsg(syscall.SOL_SOCKET, soRxqOvfl, []byte{9, 0, 0, 0})...)
+	allocs := testing.AllocsPerRun(1000, func() {
+		if n, ok := DropCount(buf); !ok || n != 9 {
+			t.Fatal("parse failed")
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("%.1f allocs per parse", allocs)
+	}
+}

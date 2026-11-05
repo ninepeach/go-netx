@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -19,7 +20,7 @@ func TestRejectKeepsOwnership(t *testing.T) {
 	}
 }
 
-// Checks: QUEUE-01, QUEUE-04
+// Checks: QUEUE-04
 func TestDropOldestCallsOnDrop(t *testing.T) {
 	var dropped []int
 	r := New(Options[int]{Cap: 2, Policy: DropOldest, OnDrop: func(v int) { dropped = append(dropped, v) }})
@@ -198,5 +199,110 @@ func TestCloseRacingPushPreservesBound(t *testing.T) {
 	}
 	if r.Push(999999) {
 		t.Fatal("push accepted after close")
+	}
+}
+
+// Checks: QUEUE-01
+func TestFIFOOrder(t *testing.T) {
+	r := New(Options[int]{Cap: 8})
+	for round := 0; round < 3; round++ { // wraps the ring several times
+		for i := 0; i < 8; i++ {
+			if !r.Push(round*8 + i) {
+				t.Fatal("push refused below capacity")
+			}
+		}
+		for i := 0; i < 8; i++ {
+			if v, ok := r.Pop(); !ok || v != round*8+i {
+				t.Fatalf("round %d: pop %d = %d, %v", round, i, v, ok)
+			}
+		}
+	}
+	if _, ok := r.Pop(); ok {
+		t.Fatal("pop from empty queue")
+	}
+}
+
+// Checks: QUEUE-05
+func TestNewRejectsNonPositiveCap(t *testing.T) {
+	for _, c := range []int{0, -1} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("Cap %d accepted", c)
+				}
+			}()
+			New(Options[int]{Cap: c})
+		}()
+	}
+}
+
+// Checks: QUEUE-07
+func TestRepeatedClose(t *testing.T) {
+	r := New(Options[int]{Cap: 2})
+	r.Push(1)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.Close() }()
+	}
+	wg.Wait()
+	r.Close()
+	if v, err := r.PopWait(context.Background()); err != nil || v != 1 {
+		t.Fatal("item lost by repeated Close")
+	}
+	if _, err := r.PopWait(context.Background()); err != ErrClosed {
+		t.Fatal(err)
+	}
+}
+
+// Checks: QUEUE-11
+func TestPopWaitContext(t *testing.T) {
+	r := New(Options[int]{Cap: 1})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := r.PopWait(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+}
+
+// Checks: QUEUE-14, NF-06
+func TestMultiConsumerNoLossNoDuplicate(t *testing.T) {
+	r := New(Options[int]{Cap: 16})
+	const producers, consumers, each = 4, 4, 2000
+	var pwg sync.WaitGroup
+	for p := 0; p < producers; p++ {
+		pwg.Add(1)
+		go func(p int) {
+			defer pwg.Done()
+			for i := 0; i < each; i++ {
+				if err := r.PushWait(context.Background(), p*each+i); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}(p)
+	}
+	seen := make([]atomic.Int32, producers*each)
+	var cwg sync.WaitGroup
+	for c := 0; c < consumers; c++ {
+		cwg.Add(1)
+		go func() {
+			defer cwg.Done()
+			for {
+				v, err := r.PopWait(context.Background())
+				if err != nil {
+					return
+				}
+				seen[v].Add(1)
+			}
+		}()
+	}
+	pwg.Wait()
+	r.Close()
+	cwg.Wait()
+	for v := range seen {
+		if n := seen[v].Load(); n != 1 {
+			t.Fatalf("item %d delivered %d times", v, n)
+		}
 	}
 }

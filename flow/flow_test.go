@@ -235,3 +235,26 @@ func TestConcurrentRemovalClosesFlowOnce(t *testing.T) {
 		t.Fatalf("OnClose calls=%d len=%d", closed.Load(), tb.Len())
 	}
 }
+
+// Checks: FLOW-12
+func TestConcurrentSweepsCloseOnce(t *testing.T) {
+	var closed atomic.Int32
+	tb := NewTable(TableOptions[int, int]{
+		IdleTimeout: time.Millisecond,
+		OnClose:     func(int, *Flow[int]) { closed.Add(1) },
+	})
+	const n = 1000
+	for i := 0; i < n; i++ {
+		tb.GetOrOpen(i, nil)
+	}
+	later := time.Now().Add(time.Second)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); tb.Sweep(later) }()
+	}
+	wg.Wait()
+	if closed.Load() != n || tb.Len() != 0 {
+		t.Fatalf("OnClose=%d len=%d, want %d and 0", closed.Load(), tb.Len(), n)
+	}
+}

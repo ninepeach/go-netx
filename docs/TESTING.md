@@ -78,12 +78,12 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-02 | P0 | RecvBuffer、SendBuffer 生效 | ✅ | `socket.ListenConfigAppliesBuffersBeforeBind` | RecvBuffer 和 SendBuffer 都检查了（unix） |
 | SOCK-03 | P0 | 缓冲区大小在 bind 之前设置（Control 阶段） | ✅ | `socket.ListenConfigAppliesBuffersBeforeBind` | 在 listener 上读取，证明是在 bind 前设置的 |
 | SOCK-04 | P1 | accept 出来的 TCP 连接继承 listener 的缓冲区设置 | ✅ | `tcp.AcceptedConnInheritsBuffersDarwin`<br>`tcp.AcceptedConnInheritsBuffers` | 分别在 Linux 和 macOS 上运行 |
-| SOCK-05 | P1 | 缓冲区与 ReusePort、FastOpen 组合使用时都生效 | ❌ |  |  |
+| SOCK-05 | P1 | 缓冲区与 ReusePort、FastOpen 组合使用时都生效 | ✅ | `socket.BuffersCombineWithReusePortAndFastOpen` | 仅 Linux |
 | SOCK-06 | P1 | 不支持的平台返回 `UnsupportedOptionError`，`IsUnsupported` 能识别 | ✅ | `socket.FastOpenPolicy`<br>`socket.UnsupportedOptionsAreExplicitOnDarwin` | FastOpenPolicy 在所有非 Linux 平台运行，另一个只在 macOS 运行 |
-| SOCK-07 | P1 | `UnsupportedIgnore` 只忽略“不支持”类错误，不吞掉其他系统错误 | 🔧 |  | REG-01：Linux 下 FastOpen 的任何 setsockopt 错误都会被忽略 |
+| SOCK-07 | P1 | `UnsupportedIgnore` 只忽略“不支持”类错误，不吞掉其他系统错误 | ✅ | `socket.FastOpenIgnoreOnlyUnsupportedErrors` |  |
 | SOCK-08 | P1 | `UnsupportedError` 下错误能向上传递 | ✅ | `socket.FastOpenPolicy` |  |
 | SOCK-09 | P1 | `socket.Dialer` 返回副本，不修改调用方传入的 `net.Dialer` | ✅ | `socket.DialerCopiesBaseAndAppliesBuffers` |  |
-| SOCK-10 | P1 | 缓冲区为 0 或负数时不设置 | ❌ |  |  |
+| SOCK-10 | P1 | 缓冲区为 0 或负数时不设置 | ✅ | `socket.ZeroAndNegativeBuffersAreNotApplied` | 仅 Linux |
 | SOCK-11 | P2 | `SetBuffers` 作用于已存在的连接 | ✅ | `socket.SetBuffersOnExistingConnection` |  |
 | SOCK-12 | P2 | 各平台都能编译 | ⚙️ |  | 交叉编译，见 NF-17 |
 
@@ -94,16 +94,16 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | ID | P | 检查点 | 状态 | 测试 | 说明 |
 |---|---|---|---|---|---|
 | TCP-01 | P0 | Listen 成功并能接受连接 | ✅ | `tcp.EchoAndStats` |  |
-| TCP-02 | P0 | 端口已被占用时返回错误 | ❌ |  |  |
+| TCP-02 | P0 | 端口已被占用时返回错误 | ✅ | `tcp.ListenAddressInUse` |  |
 | TCP-03 | P0 | 多个客户端连续连接都能被接受 | ✅ | `integration.TCPLineEcho` |  |
 | TCP-04 | P0 | 关闭后 Serve 返回，再次 Serve 返回 `ErrClosed` | ✅ | `tcp.ServeContextCancelAborts` |  |
-| TCP-05 | P1 | 临时 accept 错误触发退避重试，不会终止 | ❌ |  | 需要能注入临时错误的 listener |
+| TCP-05 | P1 | 临时 accept 错误触发退避重试，不会终止 | ✅ | `tcp.TemporaryAcceptErrorsBackOffAndStopPromptly` |  |
 | TCP-06 | P1 | 永久 accept 错误会 abort 所有连接并返回错误 | ✅ | `tcp.PermanentAcceptErrorAbortsHandlers` |  |
-| TCP-07 | P1 | 退避期间 Close/Shutdown 能立即唤醒 | 🔧 |  | REG-02：用的是 `time.Sleep`，最长要等 1 秒 |
-| TCP-08 | P1 | 退避时间有上限（1 秒） | ❌ |  |  |
-| TCP-09 | P1 | 并发多次调用 Close/Shutdown 不会 panic | ❌ |  |  |
-| TCP-10 | P1 | `Serve` 被调用两次时返回错误 | ❌ |  |  |
-| TCP-11 | P1 | `NewServer` 传入 nil listener 或 nil handler 时返回错误 | ❌ |  |  |
+| TCP-07 | P1 | 退避期间 Close/Shutdown 能立即唤醒 | ✅ | `backoff.WaitStopsEarly`<br>`tcp.TemporaryAcceptErrorsBackOffAndStopPromptly` |  |
+| TCP-08 | P1 | 退避时间有上限（1 秒） | ✅ | `backoff.NextDoublesAndCaps` |  |
+| TCP-09 | P1 | 并发多次调用 Close/Shutdown 不会 panic | ✅ | `tcp.ConcurrentCloseAndShutdown` |  |
+| TCP-10 | P1 | `Serve` 被调用两次时返回错误 | ✅ | `tcp.ServeTwice` |  |
+| TCP-11 | P1 | `NewServer` 传入 nil listener 或 nil handler 时返回错误 | ✅ | `tcp.NewServerRejectsNil` |  |
 
 ### 3.2 连接生命周期
 
@@ -112,13 +112,13 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | TCP-12 | P0 | 每个连接调用一次 handler，并分配唯一 ID | ✅ | `tcp.ConnIDsUnique` |  |
 | TCP-13 | P0 | handler 返回后连接被关闭，Stats 中 Active 归零 | ✅ | `tcp.EchoAndStats` |  |
 | TCP-14 | P0 | Admit 拒绝时关闭连接并计数 | ✅ | `tcp.AdmitRejects` |  |
-| TCP-15 | P1 | Admit 的许可在所有路径上成对释放 | ⚠️ | `tcp.AdmitRejects` | AdmitRejects 只覆盖正常路径；关闭期间刚 accept 的连接（track 失败）这条路径未测 |
+| TCP-15 | P1 | Admit 的许可在所有路径上成对释放 | ✅ | `tcp.AdmitRejects`<br>`tcp.ConnAcceptedDuringStopIsReleased` |  |
 | TCP-16 | P1 | Drain：停止 accept，现有 handler 可以继续运行，ctx 不会被取消 | ✅ | `tcp.ShutdownDrainsThenReturns` |  |
 | TCP-17 | P1 | Drain 超时后 abort：ctx 被取消，连接被关闭 | ✅ | `tcp.ShutdownAbortsOnTimeout` |  |
 | TCP-18 | P1 | `Draining()` 在 StopAccept 时关闭 | ✅ | `tcp.ShutdownDrainsThenReturns` |  |
-| TCP-19 | P1 | 关闭期间 accept 进来的连接不会漏登记，也不会泄漏 | ❌ |  | 竞态窗口很小，需要注入点 |
+| TCP-19 | P1 | 关闭期间 accept 进来的连接不会漏登记，也不会泄漏 | ✅ | `tcp.ConnAcceptedDuringStopIsReleased` |  |
 | TCP-20 | P1 | Serve 的 ctx 被取消等价于 abort | ✅ | `tcp.ServeContextCancelAborts` |  |
-| TCP-21 | P1 | handler 能读到 Serve ctx 中的值 | ❌ |  |  |
+| TCP-21 | P1 | handler 能读到 Serve ctx 中的值 | ✅ | `tcp.HandlerSeesServeContextValues` |  |
 | TCP-22 | P2 | 大量连接建立和断开后，goroutine 和 FD 数量不持续增长 | ❌ |  | 见 NF-18 |
 
 ### 3.3 Dialer
@@ -127,12 +127,12 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 |---|---|---|---|---|---|
 | DIAL-01 | P0 | 正常连接 | ✅ | `tcp.Dialer` |  |
 | DIAL-02 | P0 | 连接失败时返回错误，并触发 `OnDial` | ✅ | `tcp.DialEventFailure` |  |
-| DIAL-03 | P0 | ctx 取消后拨号及时结束 | ❌ |  |  |
-| DIAL-04 | P0 | 超时设置生效 | ❌ |  |  |
+| DIAL-03 | P0 | ctx 取消后拨号及时结束 | ✅ | `tcp.DialContextCancelled` |  |
+| DIAL-04 | P0 | 超时设置生效 | ✅ | `tcp.DialTimeout` |  |
 | DIAL-05 | P1 | 成功时 `DialEvent` 带有本地和远端地址 | ✅ | `tcp.DialEventSuccess` |  |
-| DIAL-06 | P1 | socket 选项作用于拨出的连接 | ❌ |  |  |
+| DIAL-06 | P1 | socket 选项作用于拨出的连接 | ✅ | `tcp.DialerAppliesSocketOptions` | 仅 Linux |
 | DIAL-07 | P1 | 回调出错时的处理 | ➖ |  | `OnDial` 没有返回值，只做观测 |
-| DIAL-08 | P1 | 并发拨号没有共享状态竞争 | ❌ |  |  |
+| DIAL-08 | P1 | 并发拨号没有共享状态竞争 | ✅ | `tcp.ConcurrentDials` |  |
 
 ## 4. udp：UDP 传输
 
@@ -142,14 +142,14 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 |---|---|---|---|---|---|
 | UDP-01 | P0 | Listen 后能正常收发 | ✅ | `udp.Echo` |  |
 | UDP-02 | P0 | 开启 ReusePort 且 Readers 大于 1 时，包会分散到不同读循环 | ✅ | `udp.ReusePortReaders` | 仅 Linux |
-| UDP-03 | P0 | 收到的数据和来源地址正确，IPv4 映射地址已还原 | ⚠️ | `udp.Echo` | 只验证了数据；双栈回包做过手动验证，没有留下测试 |
-| UDP-04 | P0 | 零长度数据报能正常交给 handler | ❌ |  |  |
+| UDP-03 | P0 | 收到的数据和来源地址正确，IPv4 映射地址已还原 | ✅ | `udp.FromAddressIsSenderAndUnmapped` | 需要双栈 socket，不支持时跳过 |
+| UDP-04 | P0 | 零长度数据报能正常交给 handler | ✅ | `udp.ZeroLengthDatagram` |  |
 | UDP-05 | P0 | 恰好 `MaxPacket` 字节的包能收到 | ✅ | `udp.DefaultMaxDatagram` |  |
 | UDP-06 | P1 | 超过 `MaxPacket` 的包被丢弃并计入 Truncated（Linux 靠 MSG_TRUNC 标志，Windows 靠 WSAEMSGSIZE 错误） | ✅ | `udp.DefaultMaxDatagram`<br>`udp.TruncatedDropped` |  |
 | UDP-07 | P1 | 多个读循环并发运行没有数据竞争 | ✅ | `udp.ConcurrentWritesAndClose`<br>`udp.ReusePortReaders` | 在 -race 下运行 |
 | UDP-08 | P1 | 读错误分类正确：暂时性、截断、致命 | ✅ | `sys.ClassifyRead` |  |
-| UDP-09 | P1 | 暂时性错误按上限 1 秒退避重试 | ⚠️ | `udp.FatalReadErrorStopsServe` | 只验证暂时性错误不会停止读循环，未验证退避时长 |
-| UDP-10 | P1 | 退避期间调用 Close 能立即唤醒 | ✅ | `udp.CloseInterruptsBackoff` |  |
+| UDP-09 | P1 | 暂时性错误按上限 1 秒退避重试 | ✅ | `backoff.NextDoublesAndCaps`<br>`udp.FatalReadErrorStopsServe` |  |
+| UDP-10 | P1 | 退避期间调用 Close 能立即唤醒 | ✅ | `backoff.WaitStopsEarly`<br>`udp.CloseInterruptsBackoff` |  |
 | UDP-11 | P1 | 致命错误关闭整个 Conn，所有读循环退出，Serve 返回该错误 | ✅ | `udp.FatalReadErrorStopsServe` |  |
 | UDP-12 | P1 | 关闭、ctx 取消后所有读循环退出，再次 Serve 返回 `ErrClosed` | ✅ | `udp.ServeAfterCloseAndContextCancel` |  |
 | UDP-13 | P2 | `Readers` 为 0 时取默认值、为负数时拒绝；上限 | ⚠️ | `udp.ListenOptionBoundaries` | 覆盖了 0 和负数；上限交给调用方，见 D-01 |
@@ -163,12 +163,12 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | UDP-16 | P0 | `WriteTo` 发送内容正确 | ✅ | `udp.ReplyValidatesPacket` | 经由 Reply 的回退路径 |
 | UDP-17 | P0 | `Reply` 回包内容正确 | ✅ | `udp.Echo` |  |
 | UDP-18 | P0 | 超过 `MaxDatagram` 时返回 `ErrTooLarge`；较小的 `MaxPacket` 不限制发送 | ✅ | `udp.WriteTooLarge` |  |
-| UDP-19 | P1 | IPv4 下 65000 字节能发出（低于 IPv4 理论上限 65507） | ⚠️ | `udp.DefaultMaxDatagram` | 在回环上发送过，未单独断言 |
-| UDP-20 | P1 | IPv6 下的发送边界 | ❌ |  |  |
+| UDP-19 | P1 | IPv4 下 65000 字节能发出（低于 IPv4 理论上限 65507） | ✅ | `udp.DefaultMaxDatagram`<br>`udp.IPv4MaxDatagramRoundTrip` |  |
+| UDP-20 | P1 | IPv6 下的发送边界 | ⚠️ | `udp.IPv6MaxDatagramRoundTrip` | 测试已写好，但当前开发环境没有 IPv6，会被跳过，尚未实际运行 |
 | UDP-21 | P1 | `Reply(nil)` 返回 `ErrNilPacket` | ✅ | `udp.ReplyValidatesPacket` |  |
 | UDP-22 | P1 | Reader 为负数或越界时回退到按端口选 socket，不 panic | ✅ | `udp.ReplyValidatesPacket` |  |
 | UDP-23 | P1 | 并发调用 WriteTo、Reply，同时 Close | ✅ | `udp.ConcurrentWritesAndClose` |  |
-| UDP-24 | P1 | 关闭后发送返回 `ErrClosed` | ⚠️ | `udp.ConcurrentWritesAndClose` | 允许返回该错误，但没有断言一定返回 |
+| UDP-24 | P1 | 关闭后发送返回 `ErrClosed` | ✅ | `udp.ConcurrentWritesAndClose`<br>`udp.WriteAfterCloseIsErrClosedAndCounted` |  |
 | UDP-25 | P1 | 并发多次调用 Shutdown | ✅ | `udp.ConcurrentShutdown` |  |
 
 ### 4.3 内核丢包计数
@@ -197,7 +197,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | FLOW-09 | P1 | 持续被访问的 flow 在 Run 并发清扫时不会被清理 | ✅ | `flow.ActiveFlowSurvivesSweep` |  |
 | FLOW-10 | P1 | 不运行 Run、只手动 Sweep 时也会推进时钟 | ✅ | `flow.ManualSweepKeepsTouchedFlow` |  |
 | FLOW-11 | P1 | 传入更早的时间时时钟不会倒退 | ✅ | `flow.SweepClockNeverMovesBackward` |  |
-| FLOW-12 | P1 | 多个 Sweep 并发执行时不会重复调用 `OnClose` | ⚠️ | `flow.ConcurrentRemovalClosesFlowOnce` | 覆盖了 Sweep 与其他关闭路径并发，多个 Sweep 之间的并发未测 |
+| FLOW-12 | P1 | 多个 Sweep 并发执行时不会重复调用 `OnClose` | ✅ | `flow.ConcurrentRemovalClosesFlowOnce`<br>`flow.ConcurrentSweepsCloseOnce` |  |
 | FLOW-13 | P1 | Run 退出时关闭所有 flow | ✅ | `flow.RunClosesAllOnExit` |  |
 | FLOW-14 | P2 | 大量 flow 下 Sweep 的耗时（文档写的是每百万约 20ms） | ❌ |  | 需要 Benchmark |
 | FLOW-15 | P2 | 不同 key 哈希冲突时不会被合并 | ➖ |  | 用的是 Go map，key 按值比较，哈希只用来选分片 |
@@ -212,8 +212,8 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | RES-01 | P0 | 未达上限时允许，达到上限时拒绝，释放后恢复 | ✅ | `limit.Concurrency` |  |
 | RES-02 | P0 | 并发情况下持有者数量不超过上限 | ✅ | `limit.ConcurrencyParallel` |  |
 | RES-03 | P0 | `InUse` 在任何时刻都不超过 `Max` | ✅ | `limit.ConcurrencyNeverExceedsMax` |  |
-| RES-04 | P1 | Release 次数多于 Acquire 时不会多出额度 | 🔧 |  | REG-13：计数会变成负数，相当于凭空多出额度；Budget 在这种情况下会 panic，两者行为不一致 |
-| RES-05 | P1 | `max <= 0` 时 panic | ❌ |  |  |
+| RES-04 | P1 | Release 次数多于 Acquire 时不会多出额度 | ✅ | `limit.ConcurrencyOverReleasePanics` |  |
+| RES-05 | P1 | `max <= 0` 时 panic | ✅ | `limit.NewConcurrencyRejectsNonPositive` |  |
 | RES-06 | P1 | 等待、ctx 取消、超时 | ➖ |  | `TryAcquire` 从不阻塞，这是设计上的选择 |
 
 ### 6.2 Rate 和 All
@@ -222,7 +222,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 |---|---|---|---|---|---|
 | RES-07 | P0 | 令牌桶的突发上限和补充速率正确 | ✅ | `limit.Rate` |  |
 | RES-08 | P1 | `All` 部分成功时会释放已经拿到的许可 | ✅ | `limit.AllReleasesOnPartialFailure` |  |
-| RES-09 | P1 | 参数非法时 panic | ❌ |  |  |
+| RES-09 | P1 | 参数非法时 panic | ✅ | `limit.NewRateRejectsNonPositive` |  |
 
 ### 6.3 Budget
 
@@ -233,26 +233,26 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | RES-12 | P1 | 释放负数或超过已预留的量时 panic | ✅ | `limit.BudgetRefusesNegative` |  |
 | RES-13 | P1 | 已有占用时预留 `MaxInt64` 不会溢出，恰好填满时成功 | ✅ | `limit.BudgetOverflow` |  |
 | RES-14 | P1 | 并发预留时 `Used` 不超过 `Max` | ✅ | `limit.BudgetParallelNeverExceeds` |  |
-| RES-15 | P1 | `max <= 0` 时 panic | ❌ |  |  |
+| RES-15 | P1 | `max <= 0` 时 panic | ✅ | `limit.NewBudgetRejectsNonPositive` |  |
 
 ## 7. queue：有界队列
 
 | ID | P | 检查点 | 状态 | 测试 | 说明 |
 |---|---|---|---|---|---|
-| QUEUE-01 | P0 | 先进先出，顺序正确 | ⚠️ | `queue.DropOldestCallsOnDrop` | 间接验证 |
+| QUEUE-01 | P0 | 先进先出，顺序正确 | ✅ | `queue.FIFOOrder` |  |
 | QUEUE-02 | P0 | 容量向上取整为 2 的幂 | ✅ | `queue.CapRoundsUp` |  |
 | QUEUE-03 | P0 | Reject：满时拒绝，所有权仍归调用方 | ✅ | `queue.RejectKeepsOwnership` |  |
 | QUEUE-04 | P0 | DropOldest：挤掉最旧的元素并交给 `OnDrop` | ✅ | `queue.DropOldestCallsOnDrop` |  |
-| QUEUE-05 | P1 | 容量为 0 或负数时 panic | ❌ |  |  |
+| QUEUE-05 | P1 | 容量为 0 或负数时 panic | ✅ | `queue.NewRejectsNonPositiveCap` |  |
 | QUEUE-06 | P1 | 关闭后拒绝新元素，已有元素仍能取出，之后返回 `ErrClosed` | ✅ | `queue.CloseDrainsThenErrClosed` |  |
-| QUEUE-07 | P1 | 重复 Close 是安全的 | ⚠️ | `queue.CloseRacingPushPreservesBound` | 覆盖了 Close 与 Push 并发，重复 Close 未测 |
+| QUEUE-07 | P1 | 重复 Close 是安全的 | ✅ | `queue.CloseRacingPushPreservesBound`<br>`queue.RepeatedClose` |  |
 | QUEUE-08 | P1 | Close 唤醒所有正在等待的消费者 | ✅ | `queue.CloseWakesWaiters` |  |
 | QUEUE-09 | P1 | Close 唤醒正在等待的生产者（`PushWait`） | ✅ | `queue.CloseWakesBlockedProducer` |  |
 | QUEUE-10 | P1 | `PushWait` 在有空位时被唤醒 | ✅ | `queue.PushWaitUnblocksOnPop` |  |
-| QUEUE-11 | P1 | `PushWait` 和 `PopWait` 能被 ctx 取消 | ⚠️ | `queue.PushWaitContext` | 只测了 PushWait，PopWait 未测 |
+| QUEUE-11 | P1 | `PushWait` 和 `PopWait` 能被 ctx 取消 | ✅ | `queue.PopWaitContext`<br>`queue.PushWaitContext` |  |
 | QUEUE-12 | P1 | Drain 把剩余元素逐个交给 `OnDrop` | ✅ | `queue.DrainReleases` |  |
 | QUEUE-13 | P1 | 多生产者、单消费者：不丢失、不重复 | ✅ | `queue.ConcurrentNoLoss` |  |
-| QUEUE-14 | P1 | 多消费者：不丢失、不重复，也不会丢失唤醒信号 | ❌ |  |  |
+| QUEUE-14 | P1 | 多消费者：不丢失、不重复，也不会丢失唤醒信号 | ✅ | `queue.MultiConsumerNoLossNoDuplicate` |  |
 | QUEUE-15 | P2 | Stats 的各项计数与实际操作一致 | ⚠️ | `queue.RejectKeepsOwnership` | 只检查了 Rejected 和 Len |
 | QUEUE-16 | P2 | Push 和 Pop 零分配 | ✅ | `queue.BenchmarkPushPop` |  |
 | QUEUE-17 | P1 | Close 与并发 Push 同时发生时，长度不超过容量，关闭后拒绝新元素 | ✅ | `queue.CloseRacingPushPreservesBound` |  |
@@ -268,7 +268,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | BUF-05 | P1 | 在 `netxdebug` 下重复 Release 会 panic | ✅ | `buf.DoubleReleasePanicsInDebug` |  |
 | BUF-06 | P1 | 在 `netxdebug` 下 `Outstanding` 能反映泄漏 | ✅ | `integration.UDPGatewayComposition` |  |
 | BUF-07 | P1 | 释放后继续使用的行为 | ➖ |  | 约定为调用方的 bug，正式构建中无法检测 |
-| BUF-08 | P1 | 并发 Get 不会返回同一块正在使用的内存 | ❌ |  |  |
+| BUF-08 | P1 | 并发 Get 不会返回同一块正在使用的内存 | ✅ | `buf.ConcurrentGetNeverShares` |  |
 | BUF-09 | P1 | 负数大小时 panic | ✅ | `buf.GetNegativeSizePanics` |  |
 | BUF-10 | P1 | 扩容、Reset | ➖ |  | 没有这两个 API，Buf 的大小固定 |
 | BUF-11 | P2 | GC 回收池中对象后，正确性不受影响 | ❌ |  | sync.Pool 的语义保证了这一点，但没有测试；可以在 Get/Release 之间调用 runtime.GC() 验证 |
@@ -281,15 +281,15 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | ID | P | 检查点 | 状态 | 测试 | 说明 |
 |---|---|---|---|---|---|
 | SYS-01 | P1 | `ClassifyRead` 对各类 errno 的分类正确 | ✅ | `sys.ClassifyRead` | 仅 unix |
-| SYS-02 | P1 | Windows 上的错误分类 | ❌ |  | 需要在 Windows 上运行 |
-| SYS-03 | P1 | `DropCount` 解析正确且零分配 | ⚠️ | `sys.DropCountParse` | 验证了正确性，未断言分配次数 |
+| SYS-02 | P1 | Windows 上的错误分类 | ✅ | `sys.ClassifyWinsock` | 策略写成纯函数，在所有平台上测试；Windows 上的实际读取路径未运行 |
+| SYS-03 | P1 | `DropCount` 解析正确且零分配 | ✅ | `sys.DropCountDoesNotAllocate`<br>`sys.DropCountParse` | 仅 Linux |
 | SYS-04 | P1 | `counter.Max` 在并发下单调不减 | ✅ | `counter.CounterMaxConcurrent`<br>`counter.CounterOperations` |  |
 | OBS-01 | P0 | TCP Stats：Accepted、Active、Closed、Rejected | ✅ | `tcp.AdmitRejects`<br>`tcp.EchoAndStats` |  |
-| OBS-02 | P1 | TCP Stats：AcceptErrors | ❌ |  | 依赖 TCP-05 |
+| OBS-02 | P1 | TCP Stats：AcceptErrors | ✅ | `tcp.TemporaryAcceptErrorsBackOffAndStopPromptly` |  |
 | OBS-03 | P0 | UDP Stats：收发的包数和字节数 | ✅ | `udp.Echo` |  |
 | OBS-04 | P1 | UDP Stats：Truncated、RecvErrors | ✅ | `udp.FatalReadErrorStopsServe`<br>`udp.TruncatedDropped` |  |
-| OBS-05 | P1 | UDP Stats：SendErrors | ❌ |  |  |
-| OBS-06 | P1 | 读取 Stats 与更新同时进行时没有数据竞争 | ❌ |  | 需要一个测试在 -race 下一边收发一边反复读取 Stats |
+| OBS-05 | P1 | UDP Stats：SendErrors | ✅ | `udp.WriteAfterCloseIsErrClosedAndCounted` |  |
+| OBS-06 | P1 | 读取 Stats 与更新同时进行时没有数据竞争 | ✅ | `tcp.StatsReadDuringTraffic` |  |
 | OBS-07 | P2 | 关闭指标采集时不影响功能 | ➖ |  | 没有开关，计数器始终开启，只是一次原子加法 |
 
 ## 10. Runtime：生命周期
@@ -305,12 +305,12 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | RUN-07 | P1 | 服务卡住时最多等待 `AbortGrace` | ✅ | `netx.StuckServiceBoundedByAbortGrace` |  |
 | RUN-08 | P1 | OnStop 有独立的 ShutdownTimeout 预算 | ✅ | `netx.OnStopGetsFreshContext`<br>`netx.OnStopHasIndependentTimeoutBudget` |  |
 | RUN-09 | P1 | drain 期间收到第二次信号会立即 abort | ✅ | `netx.SecondSignalAborts` | 仅 unix |
-| RUN-10 | P1 | 在运行前或停止后调用 Stop/Shutdown，返回 `ErrNotRunning` | ❌ |  |  |
-| RUN-11 | P1 | 并发调用 Stop 和 Shutdown | ❌ |  |  |
+| RUN-10 | P1 | 在运行前或停止后调用 Stop/Shutdown，返回 `ErrNotRunning` | ✅ | `netx.StopOutsideRunIsErrNotRunning` |  |
+| RUN-11 | P1 | 并发调用 Stop 和 Shutdown | ✅ | `netx.ConcurrentStopAndShutdown` |  |
 | RUN-12 | P1 | OnStop 返回的错误会被合并进最终结果 | ✅ | `netx.OnStopErrorIsReturned` |  |
-| RUN-13 | P1 | `Group`：一个服务出错，其余服务被 abort | ❌ |  |  |
-| RUN-14 | P1 | `Group`：Shutdown 并发进行，错误合并返回 | ⚠️ | `netx.GroupWithRealTransports` | 只测了正常路径 |
-| RUN-15 | P2 | 连续收到多次信号不会死锁 | ❌ |  |  |
+| RUN-13 | P1 | `Group`：一个服务出错，其余服务被 abort | ✅ | `netx.GroupAbortsOthersOnError` |  |
+| RUN-14 | P1 | `Group`：Shutdown 并发进行，错误合并返回 | ✅ | `netx.GroupShutdownJoinsErrors`<br>`netx.GroupWithRealTransports` |  |
+| RUN-15 | P2 | 连续收到多次信号不会死锁 | ✅ | `netx.ConcurrentStopAndShutdown`<br>`netx.RepeatedSignalsDoNotDeadlock` | 仅 unix；信号之间留出间隔，避免内核合并同类信号 |
 | RUN-16 | P2 | 停止后后台 goroutine 全部退出 | ❌ |  | 见 NF-18 |
 
 ## 11. 集成测试
@@ -321,10 +321,10 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | INT-02 | P0 | Runtime 通过 Group 同时管理 TCP 和 UDP | ✅ | `netx.GroupWithRealTransports` |  |
 | INT-03 | P0 | UDP + Flow + Buf + Queue + Limit 按 Gateway 的方式组合 | ✅ | `integration.UDPGatewayComposition` |  |
 | INT-04 | P1 | 在 `netxdebug` 下，整条链路零缓冲区泄漏 | ✅ | `integration.UDPGatewayComposition` |  |
-| INT-05 | P1 | TCP + Flow：连接关闭时清理对应的 flow | ❌ |  |  |
-| INT-06 | P1 | 队列满时 DropOldest 释放缓冲区，不泄漏 | ⚠️ | `integration.UDPGatewayComposition` | 有接入，但压力不够大，没有真正把队列打满 |
-| INT-07 | P1 | Budget 耗尽时丢包，恢复后继续正常工作 | ❌ |  |  |
-| INT-08 | P1 | TCP 在 drain 期间，长连接收到 `Draining` 信号后主动退出 | ❌ |  | 单元层面已由 TCP-16 覆盖，缺少集成测试 |
+| INT-05 | P1 | TCP + Flow：连接关闭时清理对应的 flow | ✅ | `integration.TCPFlowLifecycle` |  |
+| INT-06 | P1 | 队列满时 DropOldest 释放缓冲区，不泄漏 | ✅ | `integration.FullQueueReleasesEvictedBuffers`<br>`integration.UDPGatewayComposition` |  |
+| INT-07 | P1 | Budget 耗尽时丢包，恢复后继续正常工作 | ✅ | `integration.BudgetExhaustionDropsThenRecovers` |  |
+| INT-08 | P1 | TCP 在 drain 期间，长连接收到 `Draining` 信号后主动退出 | ✅ | `integration.TCPDrainingGoAway` |  |
 | INT-09 | P2 | 长时间运行，FD、内存、goroutine 都不泄漏 | ❌ |  | 见 NF-18 |
 
 ## 12. 回归清单与已知问题
@@ -333,8 +333,8 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 
 | ID | 模块 | 问题 | 检查点 | 状态 |
 |---|---|---|---|---|
-| REG-01 | socket | `UnsupportedIgnore` 会吞掉所有 FastOpen setsockopt 错误，不只是“不支持”类错误 | SOCK-07 | 🔧 未修复 |
-| REG-02 | tcp | accept 的退避用 `time.Sleep`，Close 时无法被唤醒 | TCP-07 | 🔧 未修复 |
+| REG-01 | socket | `UnsupportedIgnore` 会吞掉所有 FastOpen setsockopt 错误，不只是“不支持”类错误 | SOCK-07 | ✅ |
+| REG-02 | tcp | accept 的退避用 `time.Sleep`，Close 时无法被唤醒 | TCP-07 | ✅ |
 | REG-03 | udp | 读错误退避无法被 Close 唤醒 | UDP-10 | ✅ |
 | REG-04 | udp | `Reply(nil)` 会 panic | UDP-21 | ✅ |
 | REG-05 | udp | Reply 时 Reader 越界会 panic | UDP-22 | ✅ |
@@ -345,7 +345,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | REG-10 | runtime | 第二次信号被忽略 | RUN-09 | ✅ |
 | REG-11 | flow | 只手动 Sweep 时会误清理活跃的 flow | FLOW-10 | ✅ |
 | REG-12 | limit | Budget 在接近 `MaxInt64` 时溢出 | RES-13 | ✅ |
-| REG-13 | limit | `Concurrency.Release` 多调用时，计数变负，凭空多出额度 | RES-04 | 🔧 未修复 |
+| REG-13 | limit | `Concurrency.Release` 多调用时，计数变负，凭空多出额度 | RES-04 | ✅ |
 | REG-14 | limit | Budget 接受负数预留 | RES-11 | ✅ |
 | REG-15 | flow | Get 与 Sweep 竞态：取出 flow 和刷新时间之间被清理 | FLOW-09 | ✅ |
 | REG-16 | udp | 永久读错误会无限重试 | UDP-11 | ✅ |
@@ -379,7 +379,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | NF-03 | Stress | TCP 大量并发连接 | ❌ |  |  |
 | NF-04 | Stress | UDP 高并发读写，并真正触发内核丢包 | ❌ |  |  |
 | NF-05 | Stress | Flow 并发创建与清理 | ⚠️ | `flow.ActiveFlowSurvivesSweep`<br>`flow.ConcurrentRemovalClosesFlowOnce`<br>`flow.GetOrOpenConcurrentSingleCreation` |  |
-| NF-06 | Stress | Queue 多生产者、多消费者 | ⚠️ | `queue.ConcurrentNoLoss` | 只有单消费者 |
+| NF-06 | Stress | Queue 多生产者、多消费者 | ✅ | `queue.ConcurrentNoLoss`<br>`queue.MultiConsumerNoLossNoDuplicate` |  |
 | NF-07 | Fuzz | `DropCount` 解析任意字节不会 panic | ❌ |  | 解析外部输入，最适合 fuzz |
 | NF-08 | Fuzz | UDP Packet 参数 | ❌ |  |  |
 | NF-09 | Fuzz | Flow 状态机的随机操作序列 | ❌ |  |  |

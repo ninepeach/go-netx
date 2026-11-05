@@ -1,6 +1,8 @@
 package buf
 
 import (
+	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/ninepeach/go-netx/limit"
@@ -119,4 +121,32 @@ func TestGetNegativeSizePanics(t *testing.T) {
 		}
 	}()
 	NewPool(nil).Get(-1)
+}
+
+// Checks: BUF-08
+func TestConcurrentGetNeverShares(t *testing.T) {
+	p := NewPool(nil)
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 2000; i++ {
+				b := p.Get(1200)
+				mark := byte(g*31 + i)
+				for j := range b.B {
+					b.B[j] = mark
+				}
+				runtime.Gosched() // let others Get while we hold b
+				for j := range b.B {
+					if b.B[j] != mark {
+						t.Errorf("buffer shared with another owner")
+						return
+					}
+				}
+				b.Release()
+			}
+		}(g)
+	}
+	wg.Wait()
 }

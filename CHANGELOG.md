@@ -1,38 +1,11 @@
 # Changelog
 
-## v1.1.0
-
-Fixes from module-by-module reviews. No API removals; additions are
-`udp.MaxDatagram`, `udp.ErrNilPacket` and `udp.Stats.KernelDropsEnabled`.
-The default `MaxPacket` drops from 65535 to 65000.
-
-- netx: `OnStop` gets its own `ShutdownTimeout` budget instead of the
-  drain's possibly expired context.
-- netx: in `Loop`, a second signal during the drain aborts immediately.
-- flow: `Sweep` advances the table clock, so tables swept by hand without
-  `Run` no longer evict actively touched flows. Sweep cost is documented.
-- udp: `Stats.KernelDrops` accumulates the kernel's 32-bit counter across
-  wraparound instead of freezing at 2^32.
-- udp: one size limit in both directions, the new `udp.MaxDatagram`
-  (65000). `WriteTo`/`Reply` refuse longer payloads; `MaxPacket` defaults
-  to it and may not exceed it, so longer received datagrams are always
-  dropped as `Truncated`. A smaller `MaxPacket` no longer limits sends.
-- udp: `Close` interrupts a reader's error backoff instead of waiting up to
-  a second.
-- udp: `Reply` returns `ErrNilPacket` for nil and falls back to `WriteTo`'s
-  socket choice for a `Reader` index it did not assign, instead of
-  panicking.
-- udp: `Readers` sizing is documented as the caller's responsibility.
-- udp: `Stats.KernelDropsEnabled` tells "no drops" apart from "drops not
-  measured".
-- socket/tcp/udp: `RecvBuffer` and `SendBuffer` are applied before bind.
-  TCP listeners pass them to accepted connections, so there are no
-  per-connection syscalls and window scaling sees the larger buffer.
-
 ## v1.0.0
 
-Rewrite around the frozen package layout in ARCHITECTURE.md. Not compatible
-with v0.x.
+First stable release. Rewrite around the frozen package layout in
+ARCHITECTURE.md; not compatible with v0.x. Every P0 and P1 checkpoint in
+docs/TESTING.md is covered by a test, and the document is kept in sync with
+the tests mechanically (`make verify`).
 
 ### Added
 
@@ -46,7 +19,12 @@ with v0.x.
 - `buf`: `Pool` with three size classes, optional `Budget`, ownership rules,
   and `-tags netxdebug` double-release and leak checks.
 - `netx.Group` to run several services under one runtime.
-- `socket.Options.RecvBuffer` and `SendBuffer`.
+- `socket.Options.RecvBuffer` and `SendBuffer`, applied before bind; TCP
+  listeners pass them to accepted connections.
+- `udp.MaxDatagram` (65000): the size limit in both directions. `MaxPacket`
+  defaults to it and may not exceed it.
+- `udp.ErrNilPacket`, `udp.Stats.KernelDropsEnabled`.
+- `Stats.KernelDrops` survives the kernel's 32-bit counter wraparound.
 - `Stats()` snapshots on `tcp.Server`, `udp.Conn` and `queue.Ring`.
 
 ### Changed
@@ -59,7 +37,18 @@ with v0.x.
   through `Options.Admit`; three-phase shutdown where the handler context is
   cancelled only on abort; `Serve` returns after all handlers.
 - `netx.Server`: stop signals start the drain instead of cancelling the
-  service; abort waits at most `AbortGrace`.
+  service; abort waits at most `AbortGrace`; a second signal aborts at once;
+  `OnStop` gets its own `ShutdownTimeout` budget.
+- Retry backoff in the TCP accept loop and UDP readers stops immediately on
+  Close or Shutdown.
+- `limit`: `Budget` and `Concurrency` are overflow-safe and never exceed
+  their maximum, even transiently; releasing more than was acquired panics.
+- `socket`: `UnsupportedIgnore` ignores only "not supported" errors; other
+  setsockopt errors are returned.
+- `flow`: `Sweep` advances the table clock, so hand-driven sweeps do not
+  evict touched flows; touches happen under the shard lock.
+- `udp`: fatal read errors close the Conn and are returned by `Serve`;
+  `Reply` never panics on a nil or foreign packet.
 
 ### Removed
 

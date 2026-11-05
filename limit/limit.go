@@ -43,7 +43,15 @@ func (c *Concurrency) TryAcquire() bool {
 	}
 }
 
-func (c *Concurrency) Release() { c.inUse.Add(-1) }
+// Release returns a permit. Releasing more permits than were acquired is a
+// caller bug and panics, as with Budget.Release, instead of silently
+// raising the limit.
+func (c *Concurrency) Release() {
+	if c.inUse.Add(-1) < 0 {
+		c.inUse.Add(1)
+		panic("limit: Concurrency.Release without matching TryAcquire")
+	}
+}
 
 // InUse returns current holders. It never exceeds Max.
 func (c *Concurrency) InUse() int64 { return c.inUse.Load() }

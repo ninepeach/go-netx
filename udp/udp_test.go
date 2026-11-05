@@ -3,6 +3,7 @@ package udp_test
 import (
 	"context"
 	"net"
+	"net/netip"
 	"runtime"
 	"sync"
 	"testing"
@@ -46,7 +47,7 @@ func dial(t testing.TB, c *udp.Conn) *net.UDPConn {
 	return cl
 }
 
-// Checks: OBS-03, UDP-01, UDP-03, UDP-17
+// Checks: OBS-03, UDP-01, UDP-17
 func TestEcho(t *testing.T) {
 	c := start(t, echo, udp.Options{})
 	cl := dial(t, c)
@@ -323,5 +324,117 @@ func TestListenOptionBoundaries(t *testing.T) {
 	}
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Checks: UDP-04
+func TestZeroLengthDatagram(t *testing.T) {
+	got := make(chan int, 1)
+	c := start(t, func(c *udp.Conn, p *udp.Packet) {
+		got <- len(p.Data)
+		_ = c.Reply(p, p.Data)
+	}, udp.Options{})
+	cl := dial(t, c)
+	if _, err := cl.Write(nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := <-got; n != 0 {
+		t.Fatalf("handler saw %d bytes", n)
+	}
+	n, err := cl.Read(make([]byte, 8))
+	if err != nil || n != 0 {
+		t.Fatalf("empty reply: n=%d err=%v", n, err)
+	}
+	if s := c.Stats(); s.RecvPackets != 1 || s.RecvBytes != 0 || s.Truncated != 0 {
+		t.Fatalf("%+v", s)
+	}
+}
+
+// Checks: UDP-03
+func TestFromAddressIsSenderAndUnmapped(t *testing.T) {
+	from := make(chan netip.AddrPort, 1)
+	c, err := udp.Listen(context.Background(), "udp", "[::]:0", func(c *udp.Conn, p *udp.Packet) {
+		from <- p.From
+		_ = c.Reply(p, p.Data)
+	}, udp.Options{})
+	if err != nil {
+		t.Skip("no dual-stack socket:", err)
+	}
+	go c.Serve(context.Background())
+	t.Cleanup(func() { c.Close() })
+	cl, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), c.LocalAddr().Port())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	cl.SetDeadline(time.Now().Add(2 * time.Second))
+	cl.Write([]byte("x"))
+	got := <-from
+	want := cl.LocalAddr().(*net.UDPAddr).AddrPort()
+	if got != want || !got.Addr().Is4() {
+		t.Fatalf("From=%v (Is4=%v), want %v", got, got.Addr().Is4(), want)
+	}
+	// Replying to the unmapped IPv4 address over the IPv6 socket works.
+	if _, err := cl.Read(make([]byte, 8)); err != nil {
+		t.Fatal("no reply to IPv4 sender:", err)
+	}
+}
+
+// Checks: UDP-19
+func TestIPv4MaxDatagramRoundTrip(t *testing.T) {
+	got := make(chan int, 1)
+	c := start(t, func(_ *udp.Conn, p *udp.Packet) { got <- len(p.Data) }, udp.Options{})
+	if !c.LocalAddr().Addr().Is4() {
+		t.Fatal("expected an IPv4 socket")
+	}
+	if err := c.WriteTo(make([]byte, udp.MaxDatagram), c.LocalAddr()); err != nil {
+		t.Fatalf("IPv4 send of MaxDatagram failed: %v", err)
+	}
+	if n := <-got; n != udp.MaxDatagram {
+		t.Fatalf("received %d bytes", n)
+	}
+}
+
+// Checks: UDP-20
+func TestIPv6MaxDatagramRoundTrip(t *testing.T) {
+	got := make(chan int, 1)
+	c, err := udp.Listen(context.Background(), "udp6", "[::1]:0", func(_ *udp.Conn, p *udp.Packet) { got <- len(p.Data) }, udp.Options{})
+	if err != nil {
+		t.Skip("no IPv6 loopback:", err)
+	}
+	go c.Serve(context.Background())
+	t.Cleanup(func() { c.Close() })
+	if err := c.WriteTo(make([]byte, udp.MaxDatagram), c.LocalAddr()); err != nil {
+		t.Fatalf("IPv6 send of MaxDatagram failed: %v", err)
+	}
+	select {
+	case n := <-got:
+		if n != udp.MaxDatagram {
+			t.Fatalf("received %d bytes", n)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("IPv6 datagram not received")
+	}
+	if err := c.WriteTo(make([]byte, udp.MaxDatagram+1), c.LocalAddr()); err != udp.ErrTooLarge {
+		t.Fatalf("over the limit: %v", err)
+	}
+}
+
+// Checks: UDP-24, OBS-05
+func TestWriteAfterCloseIsErrClosedAndCounted(t *testing.T) {
+	c, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := c.LocalAddr()
+	c.Close()
+	if err := c.WriteTo([]byte("x"), to); err != udp.ErrClosed {
+		t.Fatalf("WriteTo after Close: %v", err)
+	}
+	if err := c.Reply(&udp.Packet{From: to}, []byte("x")); err != udp.ErrClosed {
+		t.Fatalf("Reply after Close: %v", err)
+	}
+	if s := c.Stats(); s.SendErrors != 2 || s.SendPackets != 0 {
+		t.Fatalf("%+v", s)
 	}
 }
