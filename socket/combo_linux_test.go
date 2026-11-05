@@ -13,6 +13,7 @@ import (
 
 const (
 	soReusePort  = 15 // SO_REUSEPORT
+	tcpFastOpen  = 23 // TCP_FASTOPEN
 	requestedBuf = 48 << 10
 )
 
@@ -68,5 +69,24 @@ func TestZeroAndNegativeBuffersAreNotApplied(t *testing.T) {
 		if rcv != defRcv || snd != defSnd {
 			t.Fatalf("size %d changed buffers: rcv %d→%d snd %d→%d", n, defRcv, rcv, defSnd, snd)
 		}
+	}
+}
+
+
+// Checks: SOCK-05
+func TestFastOpenAppliesOrReturnsUnsupported(t *testing.T) {
+	lc := socket.ListenConfig(socket.Options{
+		FastOpen: socket.FastOpenOptions{Enabled: true, Backlog: 64},
+	})
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		if socket.IsUnsupported(err) {
+			return
+		}
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if got := socketIntOption(t, ln.(*net.TCPListener), syscall.IPPROTO_TCP, tcpFastOpen); got <= 0 {
+		t.Fatalf("TCP_FASTOPEN=%d, want enabled", got)
 	}
 }
