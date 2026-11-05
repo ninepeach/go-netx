@@ -14,10 +14,11 @@
 | 静态检查 | `make vet` | `go vet ./...` |
 | 文档一致性 | `make doccheck` | TESTING.md 与测试代码一一对应（第 3 节） |
 | Race | `make race` | `go test -race`，普通构建和 `netxdebug` 构建各跑一轮 |
-| 交叉编译 | `make cross` | 对 linux/amd64、linux/386、darwin/arm64、windows/amd64、freebsd/amd64、js/wasm 执行 `go vet` |
+| 交叉编译 | `make cross` | 对 linux/amd64、linux/386、darwin/arm64、windows/amd64、freebsd/amd64、js/wasm 执行 `go vet`，包括 `stress` 标签下的代码 |
 
 - 禁止推送没有通过 `make verify` 的提交，包括“只改了测试”的提交。
 - 只在某个平台上运行的测试（比如只在 macOS 运行），如果本地没有那个平台，至少要保证 `make cross` 能编译通过，并在 PR 描述中写明“未在该平台上实际运行”。
+- 合并前和发布前还必须运行 `make stress`；改动了解析、queue、flow、buf 的代码时，还要运行 `make fuzz`。
 - 新增或修改了并发相关的测试，应当再单独连续运行 20 次，确认不会偶发失败：
 
   ```sh
@@ -55,7 +56,14 @@ func TestReplyValidatesPacket(t *testing.T) {
   （反例：给 `socket/options_test.go` 加上 `//go:build unix` 后，Windows 上 socket 包一个测试都没有了。）
 - 平台差异要写进测试，而不是跳过：同一个检查点在不同平台上的预期不同时，分别断言各自平台的行为。
 
-### 2.4 禁止的做法
+### 2.4 压测、Fuzz 和 Benchmark
+
+- **压测**放在带 `//go:build stress` 标签的 `stress_test.go` 文件中，函数名以 `TestStress` 开头，通过 `make stress` 运行。压测结束时，必须用 `internal/leak` 检查 goroutine 和文件描述符是否回到基线。需要持续一段时间的压测，时长要能用 `NETX_STRESS_SECONDS` 调整。
+- **Fuzz** 必须对照一个简单的模型检查不变量，而不是只检查“不会 panic”。种子语料用 `f.Add` 提供，平时随 `go test` 一起运行；修改相关代码后，用 `make fuzz` 做长时间的 fuzz。Fuzz 的输入不得把数据发到回环地址以外的地方。
+- **Benchmark** 要用 `b.ReportAllocs()`。文档和注释里的性能数字必须来自实测，并写明测试环境（例如 2 vCPU），禁止估算。
+- 第 1 节的 `make verify` 会编译检查 `stress` 标签下的代码，但不会运行压测；合并前和发布前要另外运行 `make stress`。
+
+### 2.5 禁止的做法
 
 - 禁止删除测试，或者减弱测试中的断言来让测试通过。测试失败说明代码有问题，或者测试本身有问题；如果确实是测试写错了，要在提交说明中解释原因。
 - 禁止用 `t.Skip` 掩盖失败。只有在当前平台根本不具备被测能力时才能跳过，并且要写明原因。

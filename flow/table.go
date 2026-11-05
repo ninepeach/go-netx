@@ -154,8 +154,11 @@ func (t *Table[K, V]) Range(fn func(K, *Flow[V]) bool) {
 // swept by hand instead of by Run would see every flow as idle. Run calls
 // Sweep periodically.
 //
-// Sweep visits every flow, holding one shard lock at a time: cost grows
-// linearly with the table size (roughly 20ms per million flows).
+// Sweep visits every flow, holding one shard lock at a time. Cost grows
+// with table size, and faster than linearly once the table outgrows the
+// CPU caches: about 0.2ms for 10k flows and about 100ms for 1M flows
+// (2 vCPU). With Run's 1s maximum tick, a million flows cost roughly 10%
+// of one core. See BenchmarkSweepBySize.
 func (t *Table[K, V]) Sweep(now time.Time) int {
 	t.advance(now.UnixNano())
 	if t.idle <= 0 {
