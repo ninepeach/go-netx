@@ -144,3 +144,48 @@ func BenchmarkPushPop(b *testing.B) {
 		r.Pop()
 	}
 }
+
+
+func TestCloseWakesBlockedProducer(t *testing.T) {
+	r := New(Options[int]{Cap: 1})
+	if !r.Push(1) {
+		t.Fatal("initial push failed")
+	}
+	result := make(chan error, 1)
+	go func() { result <- r.PushWait(context.Background(), 2) }()
+	time.Sleep(10 * time.Millisecond)
+	r.Close()
+	select {
+	case err := <-result:
+		if err != ErrClosed {
+			t.Fatalf("PushWait error=%v, want ErrClosed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not wake blocked producer")
+	}
+	if got := r.Stats(); got.Len != 1 || got.Rejected != 1 {
+		t.Fatalf("unexpected stats after rejected producer: %+v", got)
+	}
+}
+
+func TestCloseRacingPushPreservesBound(t *testing.T) {
+	r := New(Options[int]{Cap: 8, Policy: DropOldest})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(base int) {
+			defer wg.Done()
+			for j := 0; j < 1000; j++ {
+				r.Push(base*1000 + j)
+			}
+		}(i)
+	}
+	r.Close()
+	wg.Wait()
+	if got := r.Len(); got > r.Cap() {
+		t.Fatalf("queue length %d exceeds capacity %d", got, r.Cap())
+	}
+	if r.Push(999999) {
+		t.Fatal("push accepted after close")
+	}
+}
