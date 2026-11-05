@@ -364,7 +364,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-04 | `Concurrency.TryAcquire` 不阻塞 | Admission 只回答“现在能不能进”，排队属于 queue 的职责 |
 | D-05 | Buf 的预算只统计正在使用的内存 | sync.Pool 中闲置的内存会被 GC 回收，无法也不需要计入 |
 | D-06 | 暂不把 Sweep 改为增量式（待定） | 100 万个 flow 每次 Sweep 约 105ms，按 1 秒一次约占一个核 10%。目前各 Gateway 的规模远小于此，改为增量会增加复杂度；flow 数量接近百万时再改为每次只扫一部分分片 |
-| D-07 | TCP 不使用 worker 池复用 goroutine | 实测每个连接能省约 3µs（新开 goroutine 约 3.5～4.2µs 并有 1 次分配，复用约 0.6µs），而一次 accept 全程约 79µs，只占约 4%，抵不过管理空闲 worker 增加的复杂度。当某个 Gateway 需要处理每秒数万个短连接时，再用该场景的 Benchmark 重新评估（详见 ARCHITECTURE.md 中与 net/http、fasthttp 的对比） |
+| D-07 | TCP 不使用 worker 池复用 goroutine | worker 池是 fasthttp 针对 Web 应用大量短连接的优化；go-netx 面向长连接，新连接很少。实测每个连接只能省约 3µs（新开 goroutine 约 3.5～4.2µs 并有 1 次分配，复用约 0.6µs），约占一次 accept（79µs）的 4%，抵不过管理空闲 worker 增加的复杂度。只有当某个 Gateway 需要处理每秒数万个短连接时，才用该场景的 Benchmark 重新评估 |
 | D-08 | 拒绝连接时不回复协议层消息（不像 fasthttp 回 503） | 传输层不理解协议；需要先回复再关闭的 Gateway 自行在准入逻辑中处理 |
 | D-09 | 不提供每连接独立的 context（不像 net/http 的 ConnContext） | 每个连接要多一次分配，而 Gateway 很少需要；共享的值来自 Serve 的 ctx，连接身份用 `Conn.ID()` |
 
@@ -454,6 +454,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 
 ### 14.7 性能
 
+- [ ] 借鉴其他库的优化之前，先确认对方面向的负载和自己是否相同。例如 fasthttp 面向大量短连接，它的 worker 池对长连接网关几乎没有收益（D-07）。
 - [ ] 热路径不创建 goroutine、不分配内存、不经过内部队列，并用 Benchmark 断言分配次数。
 - [ ] 按核数分配的内存可以预先分配，按连接数分配的内存要用池，绝不按包分配。
 - [ ] 共享计数器按 cache line 对齐，或者按读者分片，避免伪共享。
