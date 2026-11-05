@@ -44,6 +44,13 @@
   a network other than TCP/UDP, and FastOpen or KeepAlive on UDP.
   **Behaviour change:** a single `Options` with TCP-only settings can no
   longer be passed to UDP listeners.
+- socket: `RecvBuffer` and `SendBuffer` are read back after being set.
+  When the kernel grants less (Linux caps them at `net.core.rmem_max` /
+  `wmem_max` without an error), Linux retries with `SO_RCVBUFFORCE` /
+  `SO_SNDBUFFORCE` (needs CAP_NET_ADMIN), and a size that is still short
+  returns the new `*socket.BufferSizeError`. `SetBuffers` verifies the same
+  way. **Behaviour change:** a buffer larger than the host allows now fails
+  Listen instead of being silently reduced; raise the sysctl.
 - socket: `ReusePort` is supported on macOS (binds, does not balance load)
   and on FreeBSD via `SO_REUSEPORT_LB` (balanced).
 

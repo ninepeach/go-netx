@@ -81,7 +81,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-05 | P1 | 缓冲区与 ReusePort 组合生效；FastOpen 成功应用或明确报告不支持 | ✅ | `socket.BuffersCombineWithReusePort`<br>`socket.FastOpenAppliesOrReturnsUnsupported` | 仅 Linux；FastOpen 按内核能力断言 |
 | SOCK-06 | P1 | 不支持的平台返回 `UnsupportedOptionError`，`IsUnsupported` 能识别 | ✅ | `socket.FastOpenUnsupportedPlatforms`<br>`socket.UnsupportedOptionsAreExplicitOnDarwin` | FastOpenUnsupportedPlatforms 在所有非 Linux 平台运行；macOS 上的测试只检查 FastOpen（ReusePort 在 macOS 上已支持，见 SOCK-20） |
 | SOCK-07 | P1 | 删除“忽略不支持”策略：不支持的请求始终返回错误 | ➖ |  | v2.0.0 移除 `UnsupportedPolicy` 和 `UnsupportedIgnore` |
-| SOCK-08 | P1 | 不支持选项的错误能向上传递，其他系统错误保持原样 | ✅ | `socket.FastOpenUnsupportedPlatforms`<br>`socket.FastOpenAlwaysReportsUnsupportedKernelErrors` |  |
+| SOCK-08 | P1 | 不支持选项的错误能向上传递，其他系统错误保持原样 | ✅ | `socket.FastOpenAlwaysReportsUnsupportedKernelErrors`<br>`socket.FastOpenUnsupportedPlatforms` |  |
 | SOCK-09 | P1 | `socket.Dialer` 返回副本，不修改调用方传入的 `net.Dialer` | ✅ | `socket.DialerCopiesBaseAndAppliesBuffers` |  |
 | SOCK-10 | P1 | 缓冲区为 0 或负数时不设置 | ✅ | `socket.ZeroAndNegativeBuffersAreNotApplied` | 仅 Linux |
 | SOCK-11 | P2 | `SetBuffers` 作用于已存在的连接 | ✅ | `socket.SetBuffersOnExistingConnection` |  |
@@ -95,6 +95,10 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-19 | P1 | 不设置任何选项时，任何网络类型都能正常工作 | ✅ | `socket.ZeroOptionsWorkOnAnyNetwork` |  |
 | SOCK-20 | P1 | macOS：ReusePort 设置 `SO_REUSEPORT`，同一端口可以绑定第二个 socket（不分流） | ⚠️ | `socket.ReusePortOnBSD` | 测试已写好，只在 macOS 上运行；当前开发环境只做了编译验证 |
 | SOCK-21 | P2 | FreeBSD：ReusePort 使用分流的 `SO_REUSEPORT_LB` | ⚠️ | `socket.ReusePortOnBSD` | 测试已写好，只在 FreeBSD 上运行；当前开发环境只做了编译验证 |
+| SOCK-22 | P0 | RecvBuffer/SendBuffer 设置后读回实际值，小于请求值时返回 `BufferSizeError`（Option、Requested、Actual 正确，Linux 读数减半），不是 `UnsupportedOptionError` | ✅ | `socket.EnsureBufferReportsShortSize` | 用模拟内核测试同一段逻辑，所有平台运行 |
+| SOCK-23 | P1 | 不足时（仅 Linux）用 FORCE 选项重试一次，FORCE 自身的错误被忽略，以重试后读回的值为准；足够时不重试；setsockopt、getsockopt 的错误原样返回 | ✅ | `socket.EnsureBufferTriesForceOnce` | 所有平台运行 |
+| SOCK-24 | P0 | Linux 真实内核：请求值不超过 rmem_max/wmem_max 时成功；超过时，有 CAP_NET_ADMIN 则拿到完整大小，没有则返回 `BufferSizeError`，Actual 等于上限 | ✅ | `socket.BufferCapOnLinux` | 运行时检测权限，分别断言两种结果；已用 root 和 `setpriv --bounding-set -net_admin` 各跑一次 |
+| SOCK-25 | P1 | `SetBuffers` 作用于已有连接时同样校验 | ✅ | `socket.BufferCapOnLinux` | 仅 Linux |
 
 ## 3. tcp：TCP 传输
 
@@ -421,6 +425,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-13 | 保留 `UnsupportedIgnore` | 它只作用于 FastOpen 这个“有则用、无则不影响正确性”的性能选项，让同一份配置能在 Linux 生产环境和 macOS 开发机上通用；只忽略内核明确表示不支持的错误（REG-01 已修复），其他错误照常返回。删除它会迫使调用方按平台写分支 |
 | D-14 | 选项不适用于当前网络类型时一律报错 | 在 unix 等网络上设置选项、在 UDP 上设置 FastOpen 或 KeepAlive，都属于配置错误，不再静默忽略，也不受 `UnsupportedIgnore` 影响。代价：TCP 和 UDP 不能再共用一份带 TCP 专属选项的 `socket.Options` |
 | D-15 | macOS 支持 ReusePort，FreeBSD 使用 `SO_REUSEPORT_LB` | macOS 允许多个 socket 绑定同一端口，但不分流，只有一个能收到数据；支持它是为了让同一份配置能在 Mac 开发机上运行，文档中写明不分流。FreeBSD 的 `SO_REUSEPORT_LB` 与 Linux 一样分流 |
+| D-16 | 缓冲区小于请求值时报错，不只报告 | 内核截断缓冲区时不报错（Linux 截到 rmem_max），网关会带着比设计小的缓冲区运行，直到高峰期丢包才发现。启动时报错，并提示调大 sysctl 或授予 CAP_NET_ADMIN，与“不静默忽略”的原则一致。代价：默认配置的机器上，请求大缓冲区会启动失败 |
 
 ## 12.1 文档一致性
 
