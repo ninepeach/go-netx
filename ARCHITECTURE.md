@@ -83,14 +83,88 @@ and call the handler inline. With `ReusePort` each reader has its own socket
 and the kernel pins each flow to one reader (`Packet.Reader`), so gateways can
 shard per-flow state without locks. There is no internal queue: the kernel
 receive buffer is the queue (`socket.Options.RecvBuffer`), and overflows are
-reported in `Stats.KernelDrops` on Linux. `udp.MaxDatagram` (65000) is the size limit in both directions;
-`MaxPacket` defaults to it and may not exceed it.
-Datagrams larger than `MaxPacket`
-are dropped and counted, never delivered truncated.
+reported in `Stats.KernelDrops` on Linux (the kernel reports drops with the
+next queued datagram, so the count lags once traffic stops).
+`udp.MaxDatagram` (65000) is the size limit in both directions; `MaxPacket`
+defaults to it and may not exceed it. Datagrams larger than `MaxPacket` are
+dropped and counted, never delivered truncated.
 
 **TCP.** One goroutine per connection on the Go netpoller. `Options.Admit`
 decides admission at accept time; rejections are counted, not logged. The
-handler context is cancelled only on abort.
+handler context is cancelled only on abort. Temporary accept errors back off
+5ms doubling to 1s, and Close or Shutdown cuts the backoff short. The server
+holds no per-connection buffers: reading is the handler's job.
+
+## TCP compared with net/http and fasthttp
+
+The TCP transport was reviewed against the two most used Go HTTP servers
+(net/http as of Go 1.24.7, fasthttp `000816e`, 2026-11). Gin has no transport
+of its own: `gin.Run` builds an `http.Server`, so it shares net/http's.
+
+| | net/http | fasthttp | go-netx |
+|---|---|---|---|
+| Connection model | goroutine per conn | worker pool reusing goroutines (LIFO) | goroutine per conn |
+| Temporary accept errors | 5ms→1s backoff, `time.Sleep` | `Timeout` only, fixed 1s sleep | 5ms→1s backoff, interruptible |
+| Permanent error detection | `Temporary()` | string match on the error text | `errors.As` plus a stopped flag |
+| Concurrency cap | none | `Concurrency`, replies 503 | `Admit`, closes and counts |
+| Per-IP cap | none | `MaxConnsPerIP` | planned (below) |
+| TCP keepalive | default 15s, fixed | on/off and period | default 15s, fixed; planned (below) |
+| Graceful shutdown | close listener, poll idle conns | close listener, poll every 100ms | `Draining()` channel, no polling |
+| After drain timeout | conns keep running | conns keep running | conns aborted automatically |
+| Idle connection memory | buffers held for life | `ReduceMemoryUsage` frees them | none held by the server |
+| Error reporting | logs | logs, rate-limited | counters (`Stats`) |
+
+### Adopted
+
+- **net/http's backoff curve**, but interruptible: a shutdown never waits
+  out a sleep (REG-02).
+- **A drain signal instead of hooks or polling**: long-lived handlers select
+  on `Conn.Draining()` and tell clients to move; Serve returns through a
+  channel when the last handler ends.
+- **Abort after the drain timeout.** Both references return `ctx.Err()` and
+  leave connections running for the caller to clean up; go-netx closes them
+  and cancels handler contexts, so a timed-out shutdown leaves nothing
+  behind (verified by the leak checks, RUN-16).
+- **Counters, not logs**, on the accept path: a flood of rejected or failed
+  accepts cannot flood the log.
+
+### Rejected
+
+Recorded as design decisions D-07 to D-09 in docs/TESTING.md.
+
+- **Worker pool (fasthttp).** It saves goroutine creation and stack growth,
+  well under a microsecond per connection. A full accept measures about 79µs
+  (`BenchmarkAccept`), dominated by syscalls, so the gain does not pay for
+  an idle-worker lifecycle. Revisit only with a benchmark that shows it.
+- **Protocol replies on rejection** (fasthttp's 503). The transport does not
+  speak the protocol; a gateway that wants to answer before closing does so
+  in its own admission logic.
+- **Per-connection contexts** (net/http's `ConnContext`). One allocation per
+  connection for something gateways rarely need: shared values come from the
+  Serve context, and identity from `Conn.ID()`.
+- **Matching error strings, fixed sleeps, polling shutdown**: already done
+  better here, as the table shows.
+
+### Planned for v1.1.0
+
+Each item gets checkpoints in docs/TESTING.md before it is implemented.
+
+1. **Configurable TCP keepalive.** IM gateways must notice peers that vanish
+   without a FIN (a phone switching networks). Add a keepalive setting to
+   `socket.Options` based on `net.KeepAliveConfig` (idle time, probe
+   interval, probe count), applied to listeners and dialers, with a way to
+   disable it.
+2. **Per-source admission.** Stop one source from taking every connection.
+   `Admit` cannot see the peer, so admission needs the remote address, for
+   example a limiter keyed by address in `limit` and a matching option in
+   `tcp`. Release must be tied to the connection's close, as fasthttp does
+   by wrapping the conn. IPv6 sources must be grouped by prefix (a /64 by
+   default): one client can hold an entire /64 and rotate addresses in it.
+3. **Idle connections hold no buffers** (a gateway pattern, documented with
+   an example rather than built in). 100k idle connections with a 4KB read
+   buffer each pin 400MB. Wait for data with a small buffer, then borrow a
+   large one from `buf.Pool` for the burst and release it when the
+   connection goes quiet, as fasthttp's `ReduceMemoryUsage` does.
 
 ## Ownership rules
 
