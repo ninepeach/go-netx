@@ -1,241 +1,88 @@
-# netx
+# go-netx
 
-`netx` provides small, overridable TCP and UDP servers with built-in signal
-handling and graceful shutdown.
+Minimal, high-performance TCP and UDP foundation for Go gateways: no
+per-packet goroutines, no per-packet allocation, no internal queues, no
+dependencies. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and its
+frozen rules.
 
-## TCP server
-
-Copy this complete example to `main.go`:
-
-```go
-package main
-
-import (
-	"context"
-	"io"
-	"log"
-	"net"
-
-	"github.com/ninepeach/go-netx"
-)
-
-func main() {
-	s := netx.NewTCPServer(":9000")
-
-	s.OnConnect = func(_ context.Context, conn net.Conn) error {
-		_, err := io.Copy(conn, conn)
-		return err
-	}
-
-	s.OnStart = func(context.Context) error {
-		log.Printf("TCP echo listening on %s", s.Addr())
-		return nil
-	}
-
-	if err := s.Loop(); err != nil {
-		log.Fatal(err)
-	}
-}
+```
+netx    runtime: start, signals, stop accepting → drain → abort
+tcp     accept loop, admission, Conn IDs, Dialer
+udp     multi-reader datagram transport
+socket  socket options (ReusePort, buffers, TCP Fast Open)
+flow    flow IDs, close state machine, idle-expiring table
+limit   admission limiters and budgets
+queue   bounded ring with overflow policy
+buf     pooled buffers with explicit ownership
 ```
 
-Run it with `go run main.go`, then connect with `nc 127.0.0.1 9000`.
-Everything typed into `nc` is echoed back. Press `Ctrl-C` in the server
-terminal for graceful shutdown.
-
-`Loop()` listens for `SIGINT` and `SIGTERM`, closes the listener, and waits for
-active connections. The server owns each accepted connection and closes it
-after `OnConnect` returns.
-
-Options are passed to the constructor:
+## TCP
 
 ```go
-s := netx.NewTCPServer(":9000", netx.TCPServerOptions{
-	MaxConnections:  4096,
-	ShutdownTimeout: 10 * time.Second,
-})
-```
-
-Use `OnOpen` and `OnClose` for protocol-independent connection setup and
-observability. Returning an error from `OnOpen` rejects the connection before
-the handler runs:
-
-```go
-s := netx.NewTCPServer(":9000", netx.TCPServerOptions{
-	OnOpen: func(_ context.Context, conn net.Conn) error {
-		return conn.SetDeadline(time.Now().Add(10 * time.Second))
-	},
-	OnClose: func(conn net.Conn) {
-		log.Printf("closed %s", conn.RemoteAddr())
-	},
-})
-```
-
-## UDP server
-
-```go
-s := netx.NewUDPServer(":9001")
-
-s.OnPacket = func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
-	return request.Payload, nil
-}
-
-if err := s.Loop(); err != nil {
+ln, err := tcp.Listen(ctx, "tcp", ":9000", func(ctx context.Context, c *tcp.Conn) {
+	_, _ = io.Copy(c, c) // the server closes c when the handler returns
+}, tcp.Options{Admit: limit.NewConcurrency(10_000)})
+if err != nil {
 	log.Fatal(err)
 }
+log.Fatal(netx.NewServer(ln).Loop()) // SIGINT/SIGTERM → graceful shutdown
 ```
 
-The returned bytes are sent to the packet source. Return `nil, nil` to send no
-response. Use `UDPServerOptions.MaxHandlers` to limit concurrent handlers.
-UDP listeners now accept the same `socket.Options` family as TCP listeners,
-including `ReusePort` on supported platforms.
+Long-lived handlers watch `c.Draining()` to move clients away during a
+graceful shutdown; `ctx` is cancelled only when the drain times out.
 
-## Lifecycle hooks
-
-TCP and UDP servers expose the same lifecycle hooks:
+## UDP
 
 ```go
-s.OnStart = func(context.Context) error {
-	log.Printf("listening on %s", s.Addr())
-	return nil
+conn, err := udp.Listen(ctx, "udp", ":9001", func(c *udp.Conn, p *udp.Packet) {
+	_ = c.Reply(p, p.Data) // p.Data is borrowed: valid only in this call
+}, udp.Options{Readers: 4, Socket: socket.Options{ReusePort: true, RecvBuffer: 8 << 20}})
+if err != nil {
+	log.Fatal(err)
 }
-s.OnStop = func(context.Context) error {
-	log.Print("stopped")
-	return nil
+log.Fatal(netx.NewServer(conn).Loop())
+```
+
+The handler runs inline on its reader. To keep data or hand it to another
+goroutine, copy it into an owned buffer:
+
+```go
+b := pool.Copy(p.Data)       // owned
+if !q.Push(b) {              // transfer failed: still ours
+	b.Release()
 }
-s.OnError = func(err error) {
-	log.Printf("server: %v", err)
-}
 ```
 
-- `Loop()` manages `SIGINT` and `SIGTERM`.
-- `LoopContext(ctx)` uses caller-provided cancellation.
-- `Stop()` requests asynchronous cancellation.
-- `Shutdown(ctx)` cancels and waits for completion.
-- `Ready()` is closed after network binding succeeds or fails.
-- `Addr()` returns the bound address after `Ready()`.
-
-A server is one-shot: `new → starting → running → stopping → stopped`.
-
-## Generic services
-
-Non-network services can use the same lifecycle runtime:
+## Several services
 
 ```go
-type Service interface {
-	Serve(context.Context) error
-	Shutdown(context.Context) error
-}
-
-return netx.NewServer(service).Loop()
+netx.NewServer(netx.Group(tcpServer, udpConn, netx.ServiceFuncs{ServeFunc: flows.Run})).Loop()
 ```
 
-Functions can be assigned directly:
+## Observability
 
-```go
-s := netx.NewServer()
-s.OnServe = serve
-s.OnShutdown = shutdown
-return s.Loop()
-```
+Every component has `Stats()` returning a snapshot (`udp.Stats.KernelDrops`,
+`tcp.Stats.Rejected`, `queue.Stats.Dropped`, …). Export them however you like.
 
-## TCP Fast Open
+## Performance
 
-```go
-s := netx.NewTCPServer(":9000", netx.TCPServerOptions{
-	Socket: socket.Options{
-		FastOpen: socket.FastOpenOptions{
-			Enabled:     true,
-			Backlog:     256,
-			Unsupported: socket.UnsupportedError,
-		},
-	},
-})
-```
+UDP echo round trip on loopback (2 vCPU, Go 1.24, 512-byte payload):
 
-TCP Fast Open is implemented on Linux. Other platforms return an unsupported
-option error or ignore it according to the selected policy.
+| | ns/op | allocs/op |
+|---|---|---|
+| v0.2 | 32,500 | 5 |
+| v1.0 | 10,800 | 0 |
 
-## Dial events
-
-TCP dialers can report one event after each connection attempt. The callback is
-optional; netx does not aggregate, score, log, or retry targets:
-
-```go
-dialer := tcp.NewDialer(tcp.DialOptions{
-	Timeout: 5 * time.Second,
-	OnDial: func(event tcp.DialEvent) {
-		log.Printf("target=%s duration=%s err=%v",
-			event.Address, event.Duration, event.Err)
-	},
-})
-
-conn, err := dialer.DialContext(ctx, "tcp", "example.com:443")
-```
-
-Successful events also contain local and remote socket addresses. Applications
-can use these objective results to calculate target-specific connection quality.
-
-## Echo examples
-
-Build all example executables:
+## Examples
 
 ```sh
 make examples
-./build/examples/tcp-echo
+./build/examples/tcp-echo     # tcp-client, udp-echo, udp-client,
+                              # http-server, socks5-server
 ```
-
-The generated binaries are placed in `build/examples/`:
-
-- `tcp-echo`, `tcp-client`
-- `udp-echo`, `udp-client`
-- `http-server`
-- `socks5-server`
-
-Run the minimal HTTP server:
-
-```sh
-./build/examples/http-server
-curl http://127.0.0.1:8080/hello
-```
-
-Run the minimal no-auth SOCKS5 CONNECT server:
-
-```sh
-./build/examples/socks5-server
-curl --socks5-hostname 127.0.0.1:1080 https://example.com
-```
-
-The SOCKS5 example intentionally implements only the CONNECT command. Protocol
-logic remains in the example rather than the transport library.
-
-Start a server:
-
-```sh
-go run ./examples/tcp-echo
-# or
-go run ./examples/udp-echo
-```
-
-From another terminal:
-
-```sh
-go run ./examples/tcp-client "hello TCP"
-# or
-go run ./examples/udp-client "hello UDP"
-```
-
-## Packages
-
-- `netx`: overridable servers and service lifecycle.
-- `tcp`: TCP listener, connection lifecycle, limits, and dialer.
-- `udp`: context-aware packet server, socket options, response writer, and client.
-- `socket`: socket options and Linux TCP Fast Open.
-- `mux`: session and stream contracts.
 
 ## Verification
 
 ```sh
-make test
-make race
-make vet
+make check   # test, race (with and without -tags netxdebug), vet
 ```

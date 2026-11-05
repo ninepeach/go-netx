@@ -3,150 +3,170 @@ package netx_test
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ninepeach/go-netx"
+	"github.com/ninepeach/go-netx/tcp"
+	"github.com/ninepeach/go-netx/udp"
 )
 
-type blockingService struct {
-	started  chan struct{}
+// fake records lifecycle calls. Serve blocks until aborted or shut down.
+type fake struct {
+	mu       sync.Mutex
+	calls    []string
 	stopped  chan struct{}
-	serveErr error
-	stopErr  error
 	once     sync.Once
+	serveErr error
 }
 
-func (s *blockingService) Serve(ctx context.Context) error {
-	close(s.started)
-	<-ctx.Done()
-	<-s.stopped
-	return s.serveErr
-}
+func newFake() *fake { return &fake{stopped: make(chan struct{})} }
 
-func (s *blockingService) Shutdown(context.Context) error {
-	s.once.Do(func() { close(s.stopped) })
-	return s.stopErr
-}
+func (f *fake) record(s string) { f.mu.Lock(); f.calls = append(f.calls, s); f.mu.Unlock() }
+func (f *fake) log() string     { f.mu.Lock(); defer f.mu.Unlock(); return strings.Join(f.calls, ",") }
 
-func TestServerLifecycleOrderAndExternalShutdown(t *testing.T) {
-	service := &blockingService{started: make(chan struct{}), stopped: make(chan struct{})}
-	server := netx.NewServer(service)
-	server.ShutdownTimeout = time.Second
-	var mu sync.Mutex
-	var order []string
-	add := func(value string) { mu.Lock(); order = append(order, value); mu.Unlock() }
-	server.OnStart = func(context.Context) error { add("start"); return nil }
-	server.OnStop = func(context.Context) error { add("stop"); return nil }
-	done := make(chan error, 1)
-	go func() { done <- server.LoopContext(context.Background()) }()
+func (f *fake) Serve(ctx context.Context) error {
+	f.record("serve")
+	if f.serveErr != nil {
+		return f.serveErr
+	}
 	select {
-	case <-service.started:
-	case <-time.After(time.Second):
-		t.Fatal("service did not start")
+	case <-ctx.Done():
+		f.record("abort")
+	case <-f.stopped:
 	}
-	if got := server.State(); got != netx.StateRunning {
-		t.Fatalf("state %s", got)
+	return nil
+}
+
+func (f *fake) Shutdown(context.Context) error {
+	f.record("shutdown")
+	f.once.Do(func() { close(f.stopped) })
+	return nil
+}
+
+func TestOrderAndShutdown(t *testing.T) {
+	f := newFake()
+	s := netx.NewServer(f)
+	s.OnStart = func(context.Context) error { f.record("start"); return nil }
+	s.OnStop = func(context.Context) error { f.record("stop"); return nil }
+	done := make(chan error)
+	go func() { done <- s.LoopContext(context.Background()) }()
+	for s.State() != netx.StateRunning {
+		time.Sleep(time.Millisecond)
 	}
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	// Drained gracefully: Serve returned before abort, so no "abort".
+	if got := f.log(); got != "start,serve,shutdown,stop" {
+		t.Fatal(got)
+	}
+	if s.State() != netx.StateStopped {
+		t.Fatal(s.State())
+	}
+}
+
+func TestParentCancelDrainsNotAborts(t *testing.T) {
+	f := newFake()
+	s := netx.NewServer(f)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- s.LoopContext(ctx) }()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.log(), "abort") {
+		t.Fatalf("aborted instead of draining: %s", f.log())
+	}
+}
+
+func TestServeErrorStopsAndIsReturned(t *testing.T) {
+	f := newFake()
+	f.serveErr = errors.New("boom")
+	err := netx.NewServer(f).LoopContext(context.Background())
+	if !errors.Is(err, f.serveErr) {
+		t.Fatal(err)
+	}
+}
+
+func TestStartErrorShutsDown(t *testing.T) {
+	f := newFake()
+	s := netx.NewServer(f)
+	s.OnStart = func(context.Context) error { return errors.New("no") }
+	if err := s.LoopContext(context.Background()); err == nil || f.log() != "shutdown" {
+		t.Fatalf("err=%v log=%s", err, f.log())
+	}
+}
+
+func TestOneShotAndPanic(t *testing.T) {
+	s := netx.NewServer(netx.ServiceFuncs{ServeFunc: func(context.Context) error { panic("x") }})
+	if err := s.LoopContext(context.Background()); err == nil || !strings.Contains(err.Error(), "panic") {
+		t.Fatal(err)
+	}
+	if err := s.LoopContext(context.Background()); err != netx.ErrAlreadyRunning {
+		t.Fatal(err)
+	}
+}
+
+func TestStuckServiceBoundedByAbortGrace(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	s := netx.NewServer(netx.ServiceFuncs{ServeFunc: func(context.Context) error { <-block; return nil }})
+	s.ShutdownTimeout = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := s.LoopContext(ctx); !errors.Is(err, netx.ErrAbortTimeout) {
+		t.Fatal(err)
+	}
+	if time.Since(start) > 3*netx.AbortGrace {
+		t.Fatal("not bounded")
+	}
+}
+
+func TestGroupWithRealTransports(t *testing.T) {
+	ctx := context.Background()
+	ts, err := tcp.Listen(ctx, "tcp", "127.0.0.1:0", func(_ context.Context, c *tcp.Conn) { _, _ = io.Copy(c, c) }, tcp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	us, err := udp.Listen(ctx, "udp", "127.0.0.1:0", func(c *udp.Conn, p *udp.Packet) { _ = c.Reply(p, p.Data) }, udp.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := netx.NewServer(netx.Group(ts, us))
+	done := make(chan error)
+	go func() { done <- s.LoopContext(ctx) }()
+	for s.State() != netx.StateRunning {
+		time.Sleep(time.Millisecond)
+	}
+
+	c, err := net.Dial("tcp", ts.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Write([]byte("hi"))
+	in := make([]byte, 2)
+	if _, err := io.ReadFull(c, in); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+
+	sctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
+	if err := s.Shutdown(sctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(order) != 2 || order[0] != "start" || order[1] != "stop" {
-		t.Fatalf("order %v", order)
-	}
-	if got := server.State(); got != netx.StateStopped {
-		t.Fatalf("state %s", got)
-	}
-}
-
-func TestServerSupportsLegacyFunctionAdapter(t *testing.T) {
-	run := make(chan struct{})
-	closed := make(chan struct{})
-	server := netx.NewServer(netx.ServiceFuncs{
-		ServeFunc:    func(context.Context) error { close(run); <-closed; return nil },
-		ShutdownFunc: func(context.Context) error { close(closed); return nil },
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- server.LoopContext(ctx) }()
-	<-run
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestServerJoinsServeAndShutdownErrors(t *testing.T) {
-	serveErr := errors.New("serve failed")
-	shutdownErr := errors.New("shutdown failed")
-	server := netx.NewServer(netx.ServiceFuncs{
-		ServeFunc:    func(context.Context) error { return serveErr },
-		ShutdownFunc: func(context.Context) error { return shutdownErr },
-	})
-	err := server.LoopContext(context.Background())
-	if !errors.Is(err, serveErr) || !errors.Is(err, shutdownErr) {
-		t.Fatalf("got %v", err)
-	}
-}
-
-func TestServerValidatesConfigurationAndIsOneShot(t *testing.T) {
-	server := netx.NewServer()
-	if err := server.LoopContext(context.Background()); !errors.Is(err, netx.ErrServiceRequired) {
-		t.Fatalf("got %v", err)
-	}
-	if err := server.LoopContext(context.Background()); !errors.Is(err, netx.ErrAlreadyRunning) {
-		t.Fatalf("got %v", err)
-	}
-
-	conflict := netx.NewServer(netx.ServiceFuncs{ServeFunc: func(context.Context) error { return nil }})
-	conflict.OnServe = func(context.Context) error { return nil }
-	if err := conflict.LoopContext(context.Background()); !errors.Is(err, netx.ErrServiceConflict) {
-		t.Fatalf("got %v", err)
-	}
-}
-
-func TestServerConvertsHookPanicToError(t *testing.T) {
-	server := netx.NewServer()
-	server.OnServe = func(context.Context) error { panic("boom") }
-	err := server.LoopContext(context.Background())
-	if err == nil {
-		t.Fatal("expected panic error")
-	}
-}
-
-func TestServerEnforcesShutdownTimeout(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	started := make(chan struct{})
-	release := make(chan struct{})
-	server := netx.NewServer(netx.ServiceFuncs{
-		ServeFunc: func(ctx context.Context) error {
-			close(started)
-			<-ctx.Done()
-			<-release
-			return nil
-		},
-		ShutdownFunc: func(context.Context) error { <-release; return nil },
-	})
-	server.ShutdownTimeout = 20 * time.Millisecond
-	done := make(chan error, 1)
-	go func() { done <- server.LoopContext(ctx) }()
-	<-started
-	cancel()
-	select {
-	case err := <-done:
-		close(release)
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("got %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("shutdown timeout was not enforced")
 	}
 }

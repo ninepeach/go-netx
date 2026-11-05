@@ -11,21 +11,25 @@ import (
 	"strings"
 
 	"github.com/ninepeach/go-netx"
+	"github.com/ninepeach/go-netx/tcp"
 )
 
 func main() {
-	s := netx.NewTCPServer(":8080")
-	s.OnConnect = serveHTTP
-	s.OnStart = func(context.Context) error {
-		log.Printf("HTTP server listening on http://localhost:8080")
-		return nil
+	ln, err := tcp.Listen(context.Background(), "tcp", ":8080", func(_ context.Context, c *tcp.Conn) {
+		if err := serveHTTP(c); err != nil {
+			log.Printf("conn %d: %v", c.ID(), err)
+		}
+	}, tcp.Options{})
+	if err != nil {
+		log.Fatal(err)
 	}
-	if err := s.Loop(); err != nil {
+	log.Printf("HTTP server listening on http://localhost:8080")
+	if err := netx.NewServer(ln).Loop(); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func serveHTTP(_ context.Context, conn net.Conn) error {
+func serveHTTP(conn net.Conn) error {
 	request, err := http.ReadRequest(bufio.NewReader(conn))
 	if err != nil {
 		return err

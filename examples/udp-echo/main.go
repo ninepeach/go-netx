@@ -5,18 +5,18 @@ import (
 	"log"
 
 	"github.com/ninepeach/go-netx"
+	"github.com/ninepeach/go-netx/udp"
 )
 
 func main() {
-	s := netx.NewUDPServer(":9001")
-	s.OnPacket = func(_ context.Context, request netx.UDPRequest) ([]byte, error) {
-		return request.Payload, nil
+	conn, err := udp.Listen(context.Background(), "udp", ":9001", func(c *udp.Conn, p *udp.Packet) {
+		_ = c.Reply(p, p.Data)
+	}, udp.Options{})
+	if err != nil {
+		log.Fatal(err)
 	}
-	s.OnStart = func(context.Context) error {
-		log.Printf("UDP echo listening on %s", s.Addr())
-		return nil
-	}
-	if err := s.Loop(); err != nil {
+	log.Printf("UDP echo listening on %s", conn.LocalAddr())
+	if err := netx.NewServer(conn).Loop(); err != nil {
 		log.Fatal(err)
 	}
 }

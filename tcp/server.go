@@ -1,3 +1,10 @@
+// Package tcp is a stream transport: an accept loop with admission control,
+// one goroutine per connection, and three-phase shutdown.
+//
+// Shutdown runs StopAccept → Drain → Abort. StopAccept closes the listener
+// and closes Draining so long-lived handlers can ask clients to move. Drain
+// waits for handlers to return. Abort, when the shutdown context ends,
+// cancels the handler context and closes every connection.
 package tcp
 
 import (
@@ -6,210 +13,273 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/ninepeach/go-netx/internal/counter"
+	"github.com/ninepeach/go-netx/limit"
 	"github.com/ninepeach/go-netx/socket"
 )
 
-var ErrServerClosed = errors.New("tcp: server closed")
+// ErrClosed is returned by Serve after Close or Shutdown.
+var ErrClosed = errors.New("tcp: closed")
 
-type ErrorHandler func(error)
-
-type Options struct {
-	MaxConnections int
-	OnError        ErrorHandler
-	OnOpen         func(context.Context, net.Conn) error
-	OnClose        func(net.Conn)
+// Conn is an accepted connection. The server owns it and closes it after
+// the Handler returns.
+type Conn struct {
+	net.Conn
+	id  uint64
+	srv *Server
 }
 
-type ListenOptions struct {
-	Server Options
+// ID is unique among connections accepted by this process.
+func (c *Conn) ID() uint64 { return c.id }
+
+// Draining is closed when the server stops accepting and starts draining.
+func (c *Conn) Draining() <-chan struct{} { return c.srv.draining }
+
+// Handler serves one connection. ctx is cancelled only on Abort, not when
+// draining starts; watch c.Draining() for that. Panics are not recovered.
+type Handler func(ctx context.Context, c *Conn)
+
+// Options configures a Server.
+type Options struct {
+	// Admit is consulted for every accepted connection; rejected
+	// connections are closed immediately and counted. Nil admits all.
+	Admit  limit.Limiter
 	Socket socket.Options
 }
 
+// Stats is a point-in-time snapshot.
+type Stats struct {
+	Accepted     uint64
+	Rejected     uint64 // refused by Admit
+	Active       uint64
+	Closed       uint64
+	AcceptErrors uint64 // temporary accept failures, retried with backoff
+}
+
+var lastConnID atomic.Uint64
+
+// Server accepts TCP connections. It implements the netx Service contract.
 type Server struct {
-	listener net.Listener
-	handler  Handler
-	opts     Options
+	ln      net.Listener
+	handler Handler
+	opts    Options
 
-	mu        sync.Mutex
-	serving   bool
-	closed    bool
-	conns     map[net.Conn]struct{}
-	wg        sync.WaitGroup
-	closeOnce sync.Once
-	loopDone  chan struct{}
+	accepted, rejected, active, closed, acceptErrors counter.Counter
+
+	mu       sync.Mutex
+	serving  bool
+	stopped  bool // listener closed
+	conns    map[*Conn]struct{}
+	ctx      context.Context // handler context, cancelled on Abort
+	abort    context.CancelFunc
+	draining chan struct{}
+	done     chan struct{} // closed when Serve returns
+	wg       sync.WaitGroup
+	stopOnce sync.Once
 }
 
-func NewServer(listener net.Listener, handler Handler, opts Options) (*Server, error) {
-	if listener == nil {
-		return nil, errors.New("tcp: nil listener")
-	}
-	if handler == nil {
-		return nil, errors.New("tcp: nil handler")
-	}
-	if opts.MaxConnections < 0 {
-		return nil, errors.New("tcp: MaxConnections must not be negative")
-	}
-	return &Server{listener: listener, handler: handler, opts: opts, conns: make(map[net.Conn]struct{}), loopDone: make(chan struct{})}, nil
-}
-
-func Listen(ctx context.Context, network, address string, handler Handler, opts ListenOptions) (*Server, error) {
-	lc := socket.ListenConfig(opts.Socket)
+// Listen binds network ("tcp", "tcp4", "tcp6") at address.
+func Listen(ctx context.Context, network, address string, h Handler, o Options) (*Server, error) {
+	lc := socket.ListenConfig(o.Socket)
 	ln, err := lc.Listen(ctx, network, address)
 	if err != nil {
 		return nil, err
 	}
-	srv, err := NewServer(ln, handler, opts.Server)
+	s, err := NewServer(ln, h, o)
 	if err != nil {
 		_ = ln.Close()
 		return nil, err
 	}
-	return srv, nil
+	return s, nil
 }
 
-func (s *Server) Addr() net.Addr { return s.listener.Addr() }
+// NewServer serves an existing listener, which the server then owns.
+func NewServer(ln net.Listener, h Handler, o Options) (*Server, error) {
+	if ln == nil || h == nil {
+		return nil, errors.New("tcp: nil listener or handler")
+	}
+	ctx, abort := context.WithCancel(context.Background())
+	return &Server{
+		ln: ln, handler: h, opts: o, conns: make(map[*Conn]struct{}),
+		ctx: ctx, abort: abort, draining: make(chan struct{}), done: make(chan struct{}),
+	}, nil
+}
 
+func (s *Server) Addr() net.Addr { return s.ln.Addr() }
+
+// Draining is closed when the server stops accepting.
+func (s *Server) Draining() <-chan struct{} { return s.draining }
+
+// Serve accepts until Shutdown or Close, or until ctx is cancelled, which
+// aborts. It returns after every handler has returned. A permanent accept
+// error aborts all connections and is returned. Values in ctx are visible
+// to handlers.
 func (s *Server) Serve(ctx context.Context) error {
 	s.mu.Lock()
-	if s.serving {
+	switch {
+	case s.stopped:
+		s.mu.Unlock()
+		return ErrClosed
+	case s.serving:
 		s.mu.Unlock()
 		return errors.New("tcp: Serve called more than once")
 	}
-	if s.closed {
-		s.mu.Unlock()
-		return ErrServerClosed
-	}
 	s.serving = true
+	s.ctx, s.abort = context.WithCancel(context.WithoutCancel(ctx))
 	s.mu.Unlock()
-	defer close(s.loopDone)
+	defer close(s.done)
 
 	stop := context.AfterFunc(ctx, func() { _ = s.Close() })
 	defer stop()
 
-	var delay time.Duration
-	for {
-		conn, err := s.listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil || s.isClosed() {
-				return nil
-			}
-			var temporary interface{ Temporary() bool }
-			if errors.As(err, &temporary) && temporary.Temporary() {
-				if delay == 0 {
-					delay = 5 * time.Millisecond
-				} else {
-					delay *= 2
-				}
-				if delay > time.Second {
-					delay = time.Second
-				}
-				s.report(fmt.Errorf("tcp: accept: %w", err))
-				timer := time.NewTimer(delay)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					return nil
-				case <-timer.C:
-				}
-				continue
-			}
-			return fmt.Errorf("tcp: accept: %w", err)
-		}
-		delay = 0
-		if !s.track(conn) {
-			_ = conn.Close()
-			s.report(errors.New("tcp: connection limit reached"))
-			continue
-		}
-		s.wg.Add(1)
-		go s.serveConn(ctx, conn)
+	err := s.acceptLoop()
+	if err != nil {
+		// The listener is broken: nothing new can arrive and the process
+		// will be restarted, so abort instead of waiting on handlers that
+		// may never finish.
+		s.abortAll()
 	}
-}
-
-func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
-	defer s.wg.Done()
-	defer s.untrack(conn)
-	defer conn.Close()
-	if s.opts.OnClose != nil {
-		defer s.opts.OnClose(conn)
-	}
-	if s.opts.OnOpen != nil {
-		if err := s.opts.OnOpen(ctx, conn); err != nil {
-			s.report(err)
-			return
-		}
-	}
-	if err := s.handler.ServeTCP(ctx, conn); err != nil {
-		s.report(err)
-	}
-}
-
-func (s *Server) track(conn net.Conn) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || (s.opts.MaxConnections > 0 && len(s.conns) >= s.opts.MaxConnections) {
-		return false
-	}
-	s.conns[conn] = struct{}{}
-	return true
-}
-
-func (s *Server) untrack(conn net.Conn) { s.mu.Lock(); delete(s.conns, conn); s.mu.Unlock() }
-func (s *Server) isClosed() bool        { s.mu.Lock(); defer s.mu.Unlock(); return s.closed }
-func (s *Server) report(err error) {
-	if s.opts.OnError != nil {
-		s.opts.OnError(err)
-	}
-}
-
-func (s *Server) Close() error {
-	var err error
-	s.closeOnce.Do(func() {
-		s.mu.Lock()
-		s.closed = true
-		s.mu.Unlock()
-		err = s.listener.Close()
-	})
-	if errors.Is(err, net.ErrClosed) {
-		return nil
-	}
+	s.wg.Wait()
+	s.abort()
 	return err
 }
 
+func (s *Server) acceptLoop() error {
+	var backoff time.Duration
+	for {
+		nc, err := s.ln.Accept()
+		if err != nil {
+			if s.isStopped() {
+				return nil
+			}
+			var temp interface{ Temporary() bool }
+			if errors.As(err, &temp) && temp.Temporary() {
+				s.acceptErrors.Inc()
+				backoff = min(max(backoff*2, 5*time.Millisecond), time.Second)
+				time.Sleep(backoff)
+				continue
+			}
+			s.stopAccept()
+			return fmt.Errorf("tcp: accept: %w", err)
+		}
+		backoff = 0
+		if s.opts.Admit != nil && !s.opts.Admit.TryAcquire() {
+			s.rejected.Inc()
+			_ = nc.Close()
+			continue
+		}
+		c := &Conn{Conn: nc, id: lastConnID.Add(1), srv: s}
+		if !s.track(c) {
+			s.release(c)
+			_ = nc.Close()
+			return nil
+		}
+		s.accepted.Inc()
+		s.active.Inc()
+		s.wg.Add(1)
+		go s.serveConn(c)
+	}
+}
+
+func (s *Server) serveConn(c *Conn) {
+	defer s.wg.Done()
+	defer s.release(c)
+	defer s.untrack(c)
+	defer c.Close()
+	if tc, ok := c.Conn.(*net.TCPConn); ok {
+		_ = socket.SetBuffers(tc, s.opts.Socket)
+	}
+	s.handler(s.ctx, c)
+}
+
+func (s *Server) release(*Conn) {
+	if s.opts.Admit != nil {
+		s.opts.Admit.Release()
+	}
+}
+
+func (s *Server) track(c *Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return false
+	}
+	s.conns[c] = struct{}{}
+	return true
+}
+
+func (s *Server) untrack(c *Conn) {
+	s.mu.Lock()
+	delete(s.conns, c)
+	s.mu.Unlock()
+	s.active.Dec()
+	s.closed.Inc()
+}
+
+func (s *Server) isStopped() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopped
+}
+
+// stopAccept closes the listener and signals Draining.
+func (s *Server) stopAccept() {
+	s.stopOnce.Do(func() {
+		s.mu.Lock()
+		s.stopped = true
+		s.mu.Unlock()
+		_ = s.ln.Close()
+		close(s.draining)
+	})
+}
+
+// abortAll cancels handlers and closes every connection.
+func (s *Server) abortAll() {
+	s.mu.Lock()
+	s.abort()
+	conns := make([]*Conn, 0, len(s.conns))
+	for c := range s.conns {
+		conns = append(conns, c)
+	}
+	s.mu.Unlock()
+	for _, c := range conns {
+		_ = c.Conn.Close()
+	}
+}
+
+// Shutdown stops accepting, waits for handlers until ctx is done, then
+// aborts the rest and returns ctx.Err().
 func (s *Server) Shutdown(ctx context.Context) error {
-	_ = s.Close()
+	s.stopAccept()
 	s.mu.Lock()
 	serving := s.serving
-	loopDone := s.loopDone
 	s.mu.Unlock()
-	if serving {
-		select {
-		case <-loopDone:
-		case <-ctx.Done():
-			s.closeActiveConnections()
-			return ctx.Err()
-		}
+	if !serving {
+		return nil
 	}
-	done := make(chan struct{})
-	go func() { s.wg.Wait(); close(done) }()
 	select {
-	case <-done:
+	case <-s.done:
 		return nil
 	case <-ctx.Done():
-		s.closeActiveConnections()
+		s.abortAll()
 		return ctx.Err()
 	}
 }
 
-func (s *Server) closeActiveConnections() {
-	s.mu.Lock()
-	connections := make([]net.Conn, 0, len(s.conns))
-	for conn := range s.conns {
-		connections = append(connections, conn)
-	}
-	s.mu.Unlock()
-	for _, conn := range connections {
-		_ = conn.Close()
+// Close stops accepting and aborts every connection without waiting.
+func (s *Server) Close() error {
+	s.stopAccept()
+	s.abortAll()
+	return nil
+}
+
+func (s *Server) Stats() Stats {
+	return Stats{
+		Accepted: s.accepted.Load(), Rejected: s.rejected.Load(),
+		Active: s.active.Load(), Closed: s.closed.Load(),
+		AcceptErrors: s.acceptErrors.Load(),
 	}
 }

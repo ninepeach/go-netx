@@ -3,7 +3,6 @@
 package socket
 
 import (
-	"runtime"
 	"syscall"
 )
 
@@ -37,5 +36,3 @@ func applyOptions(fd uintptr, opts Options, outbound bool) error {
 	}
 	return nil
 }
-
-var _ = runtime.GOOS

@@ -13,16 +13,21 @@ import (
 	"time"
 
 	"github.com/ninepeach/go-netx"
+	"github.com/ninepeach/go-netx/limit"
+	"github.com/ninepeach/go-netx/tcp"
 )
 
 func main() {
-	s := netx.NewTCPServer(":1080", netx.TCPServerOptions{MaxConnections: 1024})
-	s.OnConnect = serveSOCKS5
-	s.OnStart = func(context.Context) error {
-		log.Printf("SOCKS5 server listening on 127.0.0.1:1080")
-		return nil
+	ln, err := tcp.Listen(context.Background(), "tcp", ":1080", func(ctx context.Context, c *tcp.Conn) {
+		if err := serveSOCKS5(ctx, c); err != nil {
+			log.Printf("conn %d: %v", c.ID(), err)
+		}
+	}, tcp.Options{Admit: limit.NewConcurrency(1024)})
+	if err != nil {
+		log.Fatal(err)
 	}
-	if err := s.Loop(); err != nil {
+	log.Printf("SOCKS5 server listening on %s", ln.Addr())
+	if err := netx.NewServer(ln).Loop(); err != nil {
 		log.Fatal(err)
 	}
 }
