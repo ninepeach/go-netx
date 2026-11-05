@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.0.0 (unreleased)
+
+### Changed
+
+- Socket configuration now fails explicitly when a requested feature is
+  unsupported. The previous ignore/fallback policy has been removed.
+- TCP Fast Open on non-TCP networks and ReusePort on non-IP sockets are
+  rejected instead of silently discarded.
+- macOS now applies SO_REUSEPORT.
+
+### Migration
+
+- Remove the old ignore-policy setting from Fast Open configuration.
+  Handle unsupported-option errors and omit options unavailable on the
+  target platform.
+- Do not configure Fast Open for UDP or ReusePort for Unix sockets.
+
 ## v1.0.0
 
 First stable release. Rewrite around the frozen package layout in
