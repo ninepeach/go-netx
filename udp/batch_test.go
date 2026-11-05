@@ -137,19 +137,36 @@ func TestBatchOptionBoundaries(t *testing.T) {
 			t.Fatalf("Batch %d: %v", b, err)
 		}
 	}
-	if runtime.GOOS == "linux" {
-		for _, b := range []int{2, 1024} {
-			if err := listen(udp.Options{Batch: b}); err != nil {
-				t.Fatalf("Batch %d: %v", b, err)
-			}
+	// The same bounds on every platform, so a configuration valid on Linux
+	// is valid on a development Mac.
+	for _, b := range []int{2, 1024} {
+		if err := listen(udp.Options{Batch: b}); err != nil {
+			t.Fatalf("Batch %d on %s: %v", b, runtime.GOOS, err)
 		}
-		if err := listen(udp.Options{Batch: 1025}); err == nil || !strings.Contains(err.Error(), "exceeds 1024") {
-			t.Fatalf("Batch 1025: %v", err)
-		}
-		return
 	}
-	// Without recvmmsg, asking for a batch is an error, not a fallback.
-	if err := listen(udp.Options{Batch: 8}); err == nil || !strings.Contains(err.Error(), "recvmmsg") {
-		t.Fatalf("Batch 8 on %s: %v", runtime.GOOS, err)
+	if err := listen(udp.Options{Batch: 1025}); err == nil || !strings.Contains(err.Error(), "exceeds 1024") {
+		t.Fatalf("Batch 1025: %v", err)
+	}
+}
+
+// Checks: UDP-37
+func TestBatchInEffect(t *testing.T) {
+	want := map[int]int{0: 8, 1: 1, 8: 8, 32: 32}
+	if runtime.GOOS != "linux" {
+		want = map[int]int{0: 1, 1: 1, 8: 1, 32: 1} // no recvmmsg: one per call
+	}
+	for batch, eff := range want {
+		c := start(t, echo, udp.Options{Batch: batch})
+		if got := c.Batch(); got != eff {
+			t.Fatalf("Batch %d on %s: in effect %d, want %d", batch, runtime.GOOS, got, eff)
+		}
+		cl := dial(t, c)
+		in := make([]byte, 8)
+		if _, err := cl.Write([]byte("ping")); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := cl.Read(in); err != nil || string(in[:n]) != "ping" {
+			t.Fatalf("Batch %d: echo %q, %v", batch, in[:n], err)
+		}
 	}
 }

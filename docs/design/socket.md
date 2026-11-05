@@ -16,7 +16,7 @@ Overall design: [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 ```go
 type Options struct {
-    FastOpen   FastOpenOptions // TCP only; unsupported always returns an error
+    FastOpen   FastOpenOptions // TCP only; runs without it where unavailable
     ReusePort  bool            // Linux, macOS, FreeBSD
     RecvBuffer, SendBuffer int // SO_RCVBUF / SO_SNDBUF when > 0; verified
     KeepAlive  KeepAlive       // Disable, Idle, Interval, Count; zero = Go default
@@ -26,6 +26,7 @@ func ListenConfig(Options) net.ListenConfig
 func Dialer(base net.Dialer, Options) net.Dialer // returns a copy
 func SetBuffers(BufferSetter, Options) error     // for sockets made elsewhere
 func IsUnsupported(error) bool                   // *UnsupportedOptionError
+func Supported() Capabilities                    // FastOpenListen, FastOpenDial, ReusePortBalanced
 type BufferSizeError struct{ Option string; Requested, Actual int }
 ```
 
@@ -58,11 +59,19 @@ fields left at zero keep Go's defaults. The zero value changes nothing
 (Go's default: enabled, 15s). The listener's setting reaches accepted
 connections because Go applies `ListenConfig.KeepAliveConfig` on accept.
 
-**Fail fast.** A requested option either succeeds or returns an error.
-Unsupported platform/kernel features return `*UnsupportedOptionError`;
-other syscall errors are propagated unchanged. There is no ignore/fallback
-policy. Options on non-TCP/UDP networks are rejected, as are TCP-only
-options (Fast Open and KeepAlive) on UDP.
+**One configuration everywhere (D-18).** The same `Options` must run on a
+development Mac and a Linux server, so the rule depends on what an option
+does. Options that only affect performance run without the optimisation
+where the platform or kernel lacks it: Fast Open (saves a round trip;
+kernel errors meaning "unavailable" are treated as success, any other
+error is returned) and ReusePort's load spreading on macOS. `Supported()`
+reports what the platform implements, so a gateway can log it at startup.
+Options that change behaviour fail with `*UnsupportedOptionError`: options
+on non-TCP/UDP networks, TCP-only options on UDP (D-14), and ReusePort
+where a second bind would fail. There is no caller-chosen ignore policy
+(D-13). Where the platform can do it, the option is implemented rather
+than skipped: macOS listeners get Fast Open through `TCP_FASTOPEN`
+(0x105); dialing has none there because it needs `connectx()`.
 
 **ReusePort.** Linux uses `SO_REUSEPORT`; FreeBSD uses
 `SO_REUSEPORT_LB` to distribute connections and datagrams. macOS accepts
@@ -76,25 +85,24 @@ across sockets.
 | RecvBuffer / SendBuffer | ✓ verified; reading halved (kernel doubles); FORCE retry when capped | ✓ verified (cap: `kern.ipc.maxsockbuf`) | ✓ verified | ✓ verified |
 | KeepAlive idle/interval/count | ✓ | ✓ | ✓ | ✓ |
 | ReusePort | ✓ | ✓ (bind only) | ✓ (load-balanced) | unsupported error |
-| FastOpen | kernel-dependent | unsupported error | unsupported error | unsupported error |
+| FastOpen | ✓ listen and dial (kernel may disable: runs without) | listen ✓ (`TCP_FASTOPEN`); dial runs without | runs without | runs without |
 
 ## 5. Decisions
 
 - One `Options` struct shared by TCP and UDP, so a gateway configures
   sockets the same way everywhere.
-- Unsupported options are never silently ignored. Callers must explicitly
-  omit an option that is unavailable on the target platform.
+- D-18: performance options degrade where unavailable; behaviour options fail.
 - macOS ReusePort is accepted for configuration parity, but callers must
   not assume load balancing; use Linux or FreeBSD when per-socket load
   distribution is required.
-- D-13: no ignore policy; `UnsupportedPolicy` and `UnsupportedIgnore` were
-  removed, so an unsupported option always fails.
+- D-13: no caller-chosen ignore policy; `UnsupportedPolicy` and
+  `UnsupportedIgnore` were removed.
 - D-16: a buffer smaller than requested is an error, after one FORCE retry
   on Linux.
 
 ## 6. Testing
 
-SOCK-01…SOCK-25 in [docs/TESTING.md](../TESTING.md). Platform-specific
+SOCK-01…SOCK-27 in [docs/TESTING.md](../TESTING.md). Platform-specific
 options are verified with `getsockopt` and real bind attempts. SOCK-24/25
 run on the real Linux kernel; run as root and again under
 `setpriv --bounding-set -net_admin` they cover both the FORCE success and

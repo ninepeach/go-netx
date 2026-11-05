@@ -9,14 +9,18 @@ import (
 )
 
 // FastOpenOptions controls TCP Fast Open for listeners and outbound sockets.
-// If the platform or kernel does not support it, socket creation fails.
+// Fast Open only saves a round trip, so where the platform or kernel lacks
+// it the socket is created without it (see Supported); any other error
+// from enabling it is returned. Backlog applies on Linux only.
 type FastOpenOptions struct {
 	Enabled bool
 	Backlog int
 }
 
-// Options contains portable socket configuration. Platform-specific features
-// return explicit errors when a requested feature is unavailable.
+// Options contains portable socket configuration. One Options value works
+// on every supported platform: performance options the platform lacks run
+// without the optimisation (Supported reports which are implemented),
+// while options that change behaviour fail with UnsupportedOptionError.
 type Options struct {
 	FastOpen FastOpenOptions
 	// ReusePort lets several sockets bind the same address. Linux and

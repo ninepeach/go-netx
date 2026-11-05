@@ -12,7 +12,7 @@ more than one public package needs it or because it must stay hidden.
 | `EnableDropCount(RawConn) bool`, `DropCount(oob) (uint32, bool)`, `OOBSize` | Linux `SO_RXQ_OVFL`: enable it, parse the count from control data |
 | `ClassifyRead(error) ReadErr` | Transient, Truncated or Fatal, per platform |
 
-| `BatchReader` (`NewBatchReader`, `Read`, `Message`), `BatchSupported`, `DefaultBatch`, `MaxBatch` | Linux `recvmmsg` into caller-owned buffers; elsewhere a stub and `BatchSupported = false` |
+| `BatchReader` (`NewBatchReader`, `Read`, `Message`), `BatchSupported`, `DefaultBatch` | Linux `recvmmsg` into caller-owned buffers; elsewhere a stub and `BatchSupported = false` |
 
 - `BatchReader` owns one `mmsghdr`, iovec, sockaddr and control slot per
   buffer, built once. `Read` runs `recvmmsg` through `RawConn.Read`, so it

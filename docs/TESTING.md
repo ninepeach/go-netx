@@ -78,10 +78,10 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-02 | P0 | RecvBuffer、SendBuffer 生效 | ✅ | `socket.ListenConfigAppliesBuffersBeforeBind` | RecvBuffer 和 SendBuffer 都检查了（unix） |
 | SOCK-03 | P0 | 缓冲区大小在 bind 之前设置（Control 阶段） | ✅ | `socket.ListenConfigAppliesBuffersBeforeBind` | 在 listener 上读取，证明是在 bind 前设置的 |
 | SOCK-04 | P1 | accept 出来的 TCP 连接继承 listener 的缓冲区设置 | ✅ | `tcp.AcceptedConnInheritsBuffersDarwin`<br>`tcp.AcceptedConnInheritsBuffers` | 分别在 Linux 和 macOS 上运行 |
-| SOCK-05 | P1 | 缓冲区与 ReusePort 组合生效；FastOpen 成功应用或明确报告不支持 | ✅ | `socket.BuffersCombineWithReusePort`<br>`socket.FastOpenAppliesOrReturnsUnsupported` | 仅 Linux；FastOpen 按内核能力断言 |
-| SOCK-06 | P1 | 不支持的平台返回 `UnsupportedOptionError`，`IsUnsupported` 能识别 | ✅ | `socket.FastOpenUnsupportedPlatforms`<br>`socket.UnsupportedOptionsAreExplicitOnDarwin` | FastOpenUnsupportedPlatforms 在所有非 Linux 平台运行；macOS 上的测试只检查 FastOpen（ReusePort 在 macOS 上已支持，见 SOCK-20） |
-| SOCK-07 | P1 | 删除“忽略不支持”策略：不支持的请求始终返回错误 | ➖ |  | v1.1.0 移除 `UnsupportedPolicy` 和 `UnsupportedIgnore` |
-| SOCK-08 | P1 | 不支持选项的错误能向上传递，其他系统错误保持原样 | ✅ | `socket.FastOpenAlwaysReportsUnsupportedKernelErrors`<br>`socket.FastOpenUnsupportedPlatforms` |  |
+| SOCK-05 | P1 | 缓冲区与 ReusePort 组合生效；Linux 上 FastOpen 生效，backlog 正确 | ✅ | `socket.BuffersCombineWithReusePort`<br>`socket.FastOpenAppliesOnLinux` | 仅 Linux |
+| SOCK-06 | P1 | 同一份带 FastOpen 的配置在所有平台都能 Listen、Dial 并正常通信：平台不支持时不带 FastOpen 运行（D-18） | ✅ | `socket.FastOpenConfigurationRunsEverywhere` | 所有平台运行 |
+| SOCK-07 | P1 | 没有“忽略不支持”的开关（`UnsupportedPolicy`、`UnsupportedIgnore` 已删除）；性能选项按 D-18 处理，影响行为的选项不支持时报错 | ➖ |  | v1.1.0 删除开关，见 D-13、D-18 |
+| SOCK-08 | P1 | 内核表示不支持 FastOpen 的错误（ENOPROTOOPT、EOPNOTSUPP、ENOTSUP）时照常创建 socket；其他系统错误原样返回 | ✅ | `socket.FastOpenRunsWithoutWhenKernelLacksIt` | unix 平台 |
 | SOCK-09 | P1 | `socket.Dialer` 返回副本，不修改调用方传入的 `net.Dialer` | ✅ | `socket.DialerCopiesBaseAndAppliesBuffers` |  |
 | SOCK-10 | P1 | 缓冲区为 0 或负数时不设置 | ✅ | `socket.ZeroAndNegativeBuffersAreNotApplied` | 仅 Linux |
 | SOCK-11 | P2 | `SetBuffers` 作用于已存在的连接 | ✅ | `socket.SetBuffersOnExistingConnection` |  |
@@ -99,6 +99,8 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-23 | P1 | 不足时（仅 Linux）用 FORCE 选项重试一次，FORCE 自身的错误被忽略，以重试后读回的值为准；足够时不重试；setsockopt、getsockopt 的错误原样返回 | ✅ | `socket.EnsureBufferTriesForceOnce` | 所有平台运行 |
 | SOCK-24 | P0 | Linux 真实内核：请求值不超过 rmem_max/wmem_max 时成功；超过时，有 CAP_NET_ADMIN 则拿到完整大小，没有则返回 `BufferSizeError`，Actual 等于上限 | ✅ | `socket.BufferCapOnLinux` | 运行时检测权限，分别断言两种结果；已用 root 和 `setpriv --bounding-set -net_admin` 各跑一次 |
 | SOCK-25 | P1 | `SetBuffers` 作用于已有连接时同样校验 | ✅ | `socket.BufferCapOnLinux` | 仅 Linux |
+| SOCK-26 | P1 | macOS：FastOpen 在监听 socket 上设置 `TCP_FASTOPEN`；拨出方向不带 FastOpen 照常连接 | ⚠️ | `socket.FastOpenOnDarwin` | 测试已写好，只在 macOS 上运行；当前开发环境只做了编译验证 |
+| SOCK-27 | P1 | `socket.Supported()` 如实报告当前平台实现了哪些性能选项（Linux、macOS、FreeBSD、其他） | ✅ | `socket.SupportedMatchesPlatform` | 所有平台运行 |
 
 ## 3. tcp：TCP 传输
 
@@ -174,10 +176,11 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | UDP-14 | P2 | `MaxPacket` 为 0 时取默认值、为负数时拒绝、超过 `MaxDatagram` 时拒绝 | ✅ | `udp.ListenOptionBoundaries`<br>`udp.MaxPacketBound` | 0 和负数、上限都已覆盖 |
 | UDP-15 | P2 | 读循环的 handler 路径零分配 | ✅ | `udp.HandlerDoesNotAllocate` |  |
 | UDP-32 | P0 | 排队的一批数据报（来自两个发送方，超过一个 batch）全部交给 handler，每个发送方内部顺序、内容、来源地址都正确，统计一致 | ✅ | `udp.BurstFromTwoSendersDeliveredInOrder` | Linux 上走 recvmmsg（默认 Batch 8），其他平台走单包读取 |
-| UDP-33 | P1 | `Batch` 为 0 时取默认值、为负数时拒绝；Linux 上 2…1024 可用、超过 1024 拒绝；不支持 recvmmsg 的平台上 `Batch` 大于 1 时报错，不静默回退 | ✅ | `udp.BatchOptionBoundaries` | 按平台分别断言 |
+| UDP-33 | P1 | `Batch` 为 0 时取默认值、为负数时拒绝、超过 1024 时拒绝；上下限在所有平台相同 | ✅ | `udp.BatchOptionBoundaries` | 所有平台运行 |
 | UDP-34 | P1 | `Batch: 1` 走单包读取路径，同样零分配 | ✅ | `udp.HandlerDoesNotAllocate` |  |
 | UDP-35 | P1 | 一批中间夹着超过 `MaxPacket` 的数据报时，只丢弃并计数这一个，前后的照常交付 | ✅ | `udp.TruncatedInsideBurst` |  |
 | UDP-36 | P1 | 批量读取时内核丢包计数仍然生效 | ✅ | `udp.KernelDropsCountedWithBatch` | 仅 Linux |
+| UDP-37 | P1 | `Conn.Batch()` 返回实际生效的批量：Linux 上为设置值或默认 8；没有 recvmmsg 的平台上任何设置都为 1，且照常收发 | ✅ | `udp.BatchInEffect` | 按平台分别断言 |
 
 ### 4.2 发送与 Reply
 
@@ -429,11 +432,12 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-10 | `MaxConnsPerIP` 只做单机限制，不做分布式 | 准入检查跑在 accept 循环里，必须本地、不阻塞；负载均衡按源 IP 哈希时，单机限制就等于全局限制。按用户、按会话的全局限制属于 Gateway 业务层；部署在 L4 负载均衡后面时，要确保拿到真实客户端 IP |
 | D-11 | 保持“每连接一个 goroutine”的模型，不自建 epoll（不像 netpoll） | 实测每个空闲连接约 3KB（栈约 2KB + 堆约 1KB），10 万连接约 300MB，可以接受；换来 TLS、跨平台、`net.Conn` 生态和零依赖。单机连接数达到 50 万到 100 万量级时，在该 Gateway 中直接使用 netpoll 或 gnet，而不是在 go-netx 里重新实现 |
 | D-12 | `stream` 作为独立的包，与 tcp、udp 同级 | `buf` 只负责内存，`tcp` 是不涉及缓冲的传输层，读写缓冲放在哪一个里都会破坏它原有的职责；只对字节流有意义，UDP 用不上 |
-| D-13 | 删除 `UnsupportedPolicy` 和 `UnsupportedIgnore`（原决定为保留，已改为删除） | 不支持的选项一律显式报错，没有任何静默降级的开关，与 D-14、D-16 的“不静默忽略”原则一致。调用方要在不支持 FastOpen 的平台或内核上自行去掉该选项（迁移说明见 CHANGELOG v1.1.0）。代价：同一份带 FastOpen 的配置不能直接在 macOS 开发机上运行 |
+| D-13 | 删除 `UnsupportedPolicy` 和 `UnsupportedIgnore`（原决定为保留，已改为删除） | 不再提供由调用方选择“报错还是忽略”的开关。不支持时怎么办由选项本身的性质决定，规则见 D-18；影响行为的选项不支持时一律报错，与 D-14、D-16 一致 |
 | D-14 | 选项不适用于当前网络类型时一律报错 | 在 unix 等网络上设置选项、在 UDP 上设置 FastOpen 或 KeepAlive，都属于配置错误，不再静默忽略。代价：TCP 和 UDP 不能再共用一份带 TCP 专属选项的 `socket.Options` |
 | D-15 | macOS 支持 ReusePort，FreeBSD 使用 `SO_REUSEPORT_LB` | macOS 允许多个 socket 绑定同一端口，但不分流，只有一个能收到数据；支持它是为了让同一份配置能在 Mac 开发机上运行，文档中写明不分流。FreeBSD 的 `SO_REUSEPORT_LB` 与 Linux 一样分流 |
 | D-16 | 缓冲区小于请求值时报错，不只报告 | 内核截断缓冲区时不报错（Linux 截到 rmem_max），网关会带着比设计小的缓冲区运行，直到高峰期丢包才发现。启动时报错，并提示调大 sysctl 或授予 CAP_NET_ADMIN，与“不静默忽略”的原则一致。代价：默认配置的机器上，请求大缓冲区会启动失败 |
 | D-17 | Linux 上默认用 recvmmsg 批量读取（`Batch` 默认 8） | 实测有积压时每个数据报的接收开销降低约 44%，且不增加延迟（不等凑满）。代价是每个 reader 的内存变为 Batch × MaxPacket，默认约 520KB；小包网关应设置 MaxPacket。32 比 8 提升很小但内存翻 4 倍，所以默认取 8 |
+| D-18 | 只影响性能的选项在平台做不到时照常运行，影响行为的选项做不到时报错 | 要求同一份配置在 Mac 开发机和 Linux 上都能运行。FastOpen（省一个往返）、`Batch`（每次系统调用收几个包）、macOS 上的 ReusePort（能绑定但不分流）只影响性能，做不到时按普通方式运行，并由 `socket.Supported()`、`udp.Conn.Batch()` 报告实际情况；能做到的平台尽量真实现（macOS 监听端 FastOpen）。不适用于当前网络类型的选项（D-14）、达不到请求大小的缓冲区（D-16）、其他平台上的 ReusePort（第二次绑定会失败）会改变行为，仍然报错 |
 
 ## 12.1 文档一致性
 
@@ -513,7 +517,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 - [ ] 配置项都要确定 0、负数和上限各自的含义，并写进文档（UDP-13、UDP-14）。
 - [ ] 没有意义的配置值直接拒绝，比如超过协议上限的缓冲区大小。
 - [ ] 能力检测的结果要对外暴露，不能让“不支持”看起来像“零”（REG-06）。
-- [ ] 不支持的 socket 选项必须显式失败，不能静默降级；不要提供忽略策略。
+- [ ] 平台不支持某个选项时，先判断它只影响性能还是会改变行为：只影响性能的照常运行，并能查到实际是否生效；会改变行为的必须显式失败。不提供由调用方选择的忽略开关（D-13、D-18）。
 
 - [ ] fuzz 中执行速度降为“0 次每秒”，不一定是卡死：发现新输入后，引擎会花最长 60 秒去最小化它。先用 `-fuzzminimizetime` 缩短再判断。测试框架本身要保持线性复杂度，否则大输入会让它慢得像卡死。
 

@@ -16,9 +16,6 @@ const BatchSupported = true
 // DefaultBatch is the batch size udp uses when Options.Batch is zero.
 const DefaultBatch = 8
 
-// MaxBatch bounds the batch size (the kernel's UIO_MAXIOV limit on vlen).
-const MaxBatch = 1024
-
 // mmsghdr mirrors struct mmsghdr; Go pads it to the platform's alignment
 // as C does.
 type mmsghdr struct {

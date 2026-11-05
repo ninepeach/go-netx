@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +41,10 @@ var (
 // Options.MaxPacket defaults to it and may not exceed it, so received
 // datagrams longer than this are always dropped as Truncated.
 const MaxDatagram = 65000
+
+// maxBatch bounds Options.Batch on every platform (the kernel's UIO_MAXIOV
+// limit on recvmmsg), so a configuration valid on Linux is valid anywhere.
+const maxBatch = 1024
 
 // Packet is one received datagram.
 type Packet struct {
@@ -94,8 +97,11 @@ type Options struct {
 	// queued, so batching adds no latency. The handler still sees one
 	// datagram at a time, and Packet.Data stays valid only for that call.
 	// Default 8 on Linux, where the measured receive cost per queued
-	// datagram drops by about 44%, and 1 elsewhere; at most 1024. Batch > 1 on a platform
-	// without recvmmsg is an error, not a silent fallback.
+	// datagram drops by about 44%; at most 1024. Batching only changes
+	// performance, so where recvmmsg is unavailable (macOS, Windows) any
+	// Batch reads one datagram per call, and the same configuration runs
+	// on a development Mac and a Linux server (D-18). Conn.Batch reports
+	// the size in effect.
 	Batch  int
 	Socket socket.Options
 }
@@ -184,12 +190,12 @@ func Listen(ctx context.Context, network, address string, h Handler, o Options) 
 		return nil, fmt.Errorf("udp: MaxPacket %d exceeds MaxDatagram %d", o.MaxPacket, MaxDatagram)
 	}
 	switch {
-	case o.Batch > 1 && !sys.BatchSupported:
-		return nil, fmt.Errorf("udp: Batch %d needs recvmmsg, which %s does not have", o.Batch, runtime.GOOS)
-	case o.Batch > sys.MaxBatch:
-		return nil, fmt.Errorf("udp: Batch %d exceeds %d", o.Batch, sys.MaxBatch)
+	case o.Batch > maxBatch:
+		return nil, fmt.Errorf("udp: Batch %d exceeds %d", o.Batch, maxBatch)
 	case o.Batch == 0:
 		o.Batch = sys.DefaultBatch
+	case !sys.BatchSupported:
+		o.Batch = 1 // no recvmmsg: one datagram per call
 	}
 	if o.Readers == 0 {
 		o.Readers = 1
@@ -225,6 +231,10 @@ func Listen(ctx context.Context, network, address string, h Handler, o Options) 
 	c.readers = make([]readerStats, o.Readers)
 	return c, nil
 }
+
+// Batch returns the number of datagrams a reader receives per system call:
+// Options.Batch, its default, or 1 where recvmmsg is unavailable.
+func (c *Conn) Batch() int { return c.batch }
 
 // LocalAddr returns the bound address.
 func (c *Conn) LocalAddr() netip.AddrPort { return c.local }
