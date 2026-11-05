@@ -17,7 +17,7 @@ const (
 )
 
 // Checks: SOCK-05
-func TestBuffersCombineWithReusePortAndFastOpen(t *testing.T) {
+func TestBuffersCombineWithReusePort(t *testing.T) {
 	lc := socket.ListenConfig(socket.Options{
 		ReusePort:  true,
 				RecvBuffer: requestedBuf,
