@@ -146,21 +146,26 @@ func TestServeAfterCloseAndContextCancel(t *testing.T) {
 	}
 }
 
-// Checks: UDP-15
+// Checks: UDP-15, UDP-34
 func TestHandlerDoesNotAllocate(t *testing.T) {
-	c := start(t, echo, udp.Options{})
-	cl := dial(t, c)
-	msg, in := make([]byte, 512), make([]byte, 2048)
-	for i := 0; i < 100; i++ { // warm up
-		cl.Write(msg)
-		cl.Read(in)
-	}
-	allocs := testing.AllocsPerRun(1000, func() {
-		cl.Write(msg)
-		cl.Read(in)
-	})
-	if allocs > 0 {
-		t.Fatalf("%.1f allocs per round trip", allocs)
+	// The default (recvmmsg batches on Linux) and the one-datagram path.
+	for _, batch := range []int{0, 1} {
+		c := start(t, echo, udp.Options{Batch: batch})
+		cl := dial(t, c)
+		msg, in := make([]byte, 512), make([]byte, 2048)
+		for i := 0; i < 100; i++ { // warm up
+			cl.Write(msg)
+			if _, err := cl.Read(in); err != nil {
+				t.Fatalf("Batch %d: %v", batch, err)
+			}
+		}
+		allocs := testing.AllocsPerRun(1000, func() {
+			cl.Write(msg)
+			cl.Read(in)
+		})
+		if allocs > 0 {
+			t.Fatalf("Batch %d: %.1f allocs per round trip", batch, allocs)
+		}
 	}
 }
 
