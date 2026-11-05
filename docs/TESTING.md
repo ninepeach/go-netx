@@ -78,10 +78,10 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-02 | P0 | RecvBuffer、SendBuffer 生效 | ✅ | `socket.ListenConfigAppliesBuffersBeforeBind` | RecvBuffer 和 SendBuffer 都检查了（unix） |
 | SOCK-03 | P0 | 缓冲区大小在 bind 之前设置（Control 阶段） | ✅ | `socket.ListenConfigAppliesBuffersBeforeBind` | 在 listener 上读取，证明是在 bind 前设置的 |
 | SOCK-04 | P1 | accept 出来的 TCP 连接继承 listener 的缓冲区设置 | ✅ | `tcp.AcceptedConnInheritsBuffersDarwin`<br>`tcp.AcceptedConnInheritsBuffers` | 分别在 Linux 和 macOS 上运行 |
-| SOCK-05 | P1 | 缓冲区与 ReusePort、FastOpen 组合使用时都生效 | ✅ | `socket.BuffersCombineWithReusePortAndFastOpen` | 仅 Linux |
-| SOCK-06 | P1 | 不支持的平台返回 `UnsupportedOptionError`，`IsUnsupported` 能识别 | ✅ | `socket.FastOpenPolicy`<br>`socket.UnsupportedOptionsAreExplicitOnDarwin` | FastOpenPolicy 在所有非 Linux 平台运行；macOS 上的测试只检查 FastOpen（ReusePort 在 macOS 上已支持，见 SOCK-20） |
-| SOCK-07 | P1 | `UnsupportedIgnore` 只忽略“不支持”类错误，不吞掉其他系统错误 | ✅ | `socket.FastOpenIgnoreOnlyUnsupportedErrors` |  |
-| SOCK-08 | P1 | `UnsupportedError` 下错误能向上传递 | ✅ | `socket.FastOpenPolicy` |  |
+| SOCK-05 | P1 | 缓冲区与 ReusePort 组合生效；FastOpen 成功应用或明确报告不支持 | ✅ | `socket.BuffersCombineWithReusePort`<br>`socket.FastOpenAppliesOrReturnsUnsupported` | 仅 Linux；FastOpen 按内核能力断言 |
+| SOCK-06 | P1 | 不支持的平台返回 `UnsupportedOptionError`，`IsUnsupported` 能识别 | ✅ | `socket.FastOpenUnsupportedPlatforms`<br>`socket.UnsupportedOptionsAreExplicitOnDarwin` | FastOpenUnsupportedPlatforms 在所有非 Linux 平台运行；macOS 上的测试只检查 FastOpen（ReusePort 在 macOS 上已支持，见 SOCK-20） |
+| SOCK-07 | P1 | 删除“忽略不支持”策略：不支持的请求始终返回错误 | ➖ |  | v2.0.0 移除 `UnsupportedPolicy` 和 `UnsupportedIgnore` |
+| SOCK-08 | P1 | 不支持选项的错误能向上传递，其他系统错误保持原样 | ✅ | `socket.FastOpenUnsupportedPlatforms`<br>`socket.FastOpenAlwaysReportsUnsupportedKernelErrors` |  |
 | SOCK-09 | P1 | `socket.Dialer` 返回副本，不修改调用方传入的 `net.Dialer` | ✅ | `socket.DialerCopiesBaseAndAppliesBuffers` |  |
 | SOCK-10 | P1 | 缓冲区为 0 或负数时不设置 | ✅ | `socket.ZeroAndNegativeBuffersAreNotApplied` | 仅 Linux |
 | SOCK-11 | P2 | `SetBuffers` 作用于已存在的连接 | ✅ | `socket.SetBuffersOnExistingConnection` |  |
@@ -91,7 +91,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-15 | P1 | Dialer 拨出的连接同样应用 keepalive 设置 | ✅ | `socket.KeepAliveAppliesToDialer` | 仅 Linux |
 | SOCK-16 | P2 | 不设置 keepalive 时保持 Go 的默认行为（开启，15 秒） | ✅ | `socket.KeepAliveZeroValueKeepsGoDefault` | 仅 Linux |
 | SOCK-17 | P1 | tcp、udp 以外的网络类型（如 unix）设置了任何选项时返回 `UnsupportedOptionError`，不再静默忽略 | ✅ | `socket.OptionsOnOtherNetworksAreRefused` | unix socket 上验证（unix 平台） |
-| SOCK-18 | P1 | 在 UDP 上设置 FastOpen 或 KeepAlive（只适用于 TCP）时返回 `UnsupportedOptionError`，Listen 和 Dialer 都一样；不受 `UnsupportedIgnore` 影响 | ✅ | `socket.TCPOnlyOptionsOnUDPAreRefused` |  |
+| SOCK-18 | P1 | 在 UDP 上设置 FastOpen 或 KeepAlive（只适用于 TCP）时返回 `UnsupportedOptionError`，Listen 和 Dialer 都一样；始终显式报错 | ✅ | `socket.TCPOnlyOptionsOnUDPAreRefused` |  |
 | SOCK-19 | P1 | 不设置任何选项时，任何网络类型都能正常工作 | ✅ | `socket.ZeroOptionsWorkOnAnyNetwork` |  |
 | SOCK-20 | P1 | macOS：ReusePort 设置 `SO_REUSEPORT`，同一端口可以绑定第二个 socket（不分流） | ⚠️ | `socket.ReusePortOnBSD` | 测试已写好，只在 macOS 上运行；当前开发环境只做了编译验证 |
 | SOCK-21 | P2 | FreeBSD：ReusePort 使用分流的 `SO_REUSEPORT_LB` | ⚠️ | `socket.ReusePortOnBSD` | 测试已写好，只在 FreeBSD 上运行；当前开发环境只做了编译验证 |
@@ -499,7 +499,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 - [ ] 配置项都要确定 0、负数和上限各自的含义，并写进文档（UDP-13、UDP-14）。
 - [ ] 没有意义的配置值直接拒绝，比如超过协议上限的缓冲区大小。
 - [ ] 能力检测的结果要对外暴露，不能让“不支持”看起来像“零”（REG-06）。
-- [ ] “忽略不支持”的策略只能忽略不支持类的错误，不能把其他错误也一起吞掉（REG-01）。
+- [ ] 不支持的 socket 选项必须显式失败，不能静默降级；不要提供忽略策略。
 
 - [ ] fuzz 中执行速度降为“0 次每秒”，不一定是卡死：发现新输入后，引擎会花最长 60 秒去最小化它。先用 `-fuzzminimizetime` 缩短再判断。测试框架本身要保持线性复杂度，否则大输入会让它慢得像卡死。
 
