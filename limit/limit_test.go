@@ -222,3 +222,71 @@ func TestNewBudgetRejectsNonPositive(t *testing.T) {
 	mustPanic(t, "NewBudget(0)", func() { NewBudget(0) })
 	mustPanic(t, "NewBudget(-1)", func() { NewBudget(-1) })
 }
+
+// Checks: RES-16
+func TestPerKeyLimitsEachKey(t *testing.T) {
+	p := NewPerKey[string](2)
+	if !p.TryAcquire("a") || !p.TryAcquire("a") || p.TryAcquire("a") {
+		t.Fatal("limit for a")
+	}
+	if !p.TryAcquire("b") || !p.TryAcquire("b") {
+		t.Fatal("b blocked by a")
+	}
+	p.Release("a")
+	if !p.TryAcquire("a") {
+		t.Fatal("slot not returned")
+	}
+	if p.InUse("a") != 2 || p.InUse("b") != 2 || p.InUse("c") != 0 {
+		t.Fatalf("a=%d b=%d", p.InUse("a"), p.InUse("b"))
+	}
+}
+
+// Checks: RES-17
+func TestPerKeyConcurrentAndForgetsKeys(t *testing.T) {
+	p := NewPerKey[int](3)
+	var over atomic.Bool
+	var holders [8]atomic.Int32
+	var wg sync.WaitGroup
+	for g := 0; g < 32; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 2000; i++ {
+				k := (g + i) % len(holders)
+				if p.TryAcquire(k) {
+					if holders[k].Add(1) > 3 {
+						over.Store(true)
+					}
+					holders[k].Add(-1)
+					p.Release(k)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	if over.Load() {
+		t.Fatal("a key exceeded its limit")
+	}
+	if p.Keys() != 0 {
+		t.Fatalf("%d keys kept after all releases", p.Keys())
+	}
+	// Many distinct short-lived keys leave nothing behind.
+	for k := 0; k < 10000; k++ {
+		p.TryAcquire(1000 + k)
+		p.Release(1000 + k)
+	}
+	if p.Keys() != 0 {
+		t.Fatalf("%d keys kept", p.Keys())
+	}
+}
+
+// Checks: RES-18
+func TestPerKeyMisuse(t *testing.T) {
+	mustPanic(t, "NewPerKey(0)", func() { NewPerKey[int](0) })
+	mustPanic(t, "NewPerKey(-1)", func() { NewPerKey[int](-1) })
+	p := NewPerKey[int](1)
+	mustPanic(t, "Release without acquire", func() { p.Release(1) })
+	p.TryAcquire(1)
+	p.Release(1)
+	mustPanic(t, "second Release", func() { p.Release(1) })
+}

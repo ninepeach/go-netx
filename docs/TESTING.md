@@ -86,6 +86,10 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-10 | P1 | 缓冲区为 0 或负数时不设置 | ✅ | `socket.ZeroAndNegativeBuffersAreNotApplied` | 仅 Linux |
 | SOCK-11 | P2 | `SetBuffers` 作用于已存在的连接 | ✅ | `socket.SetBuffersOnExistingConnection` |  |
 | SOCK-12 | P2 | 各平台都能编译 | ⚙️ |  | 交叉编译，见 NF-17 |
+| SOCK-13 | P1 | keepalive 的空闲时间、探测间隔、探测次数作用于 listener，accept 出来的连接继承 | ✅ | `socket.KeepAliveAppliesToAcceptedConns` | 仅 Linux |
+| SOCK-14 | P1 | `KeepAlive.Disable` 关闭 keepalive | ✅ | `socket.KeepAliveDisable` | 仅 Linux |
+| SOCK-15 | P1 | Dialer 拨出的连接同样应用 keepalive 设置 | ✅ | `socket.KeepAliveAppliesToDialer` | 仅 Linux |
+| SOCK-16 | P2 | 不设置 keepalive 时保持 Go 的默认行为（开启，15 秒） | ✅ | `socket.KeepAliveZeroValueKeepsGoDefault` | 仅 Linux |
 
 ## 3. tcp：TCP 传输
 
@@ -120,6 +124,11 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | TCP-20 | P1 | Serve 的 ctx 被取消等价于 abort | ✅ | `tcp.ServeContextCancelAborts` |  |
 | TCP-21 | P1 | handler 能读到 Serve ctx 中的值 | ✅ | `tcp.HandlerSeesServeContextValues` |  |
 | TCP-22 | P2 | 大量连接建立和断开后，goroutine 和 FD 数量不持续增长 | ✅ | `tcp.StressTCPChurn` | 压测，`make stress` |
+| TCP-23 | P0 | `MaxConnsPerIP`：同一 IP 超出上限的连接被拒绝并计入 `RejectedPerIP`，其他 IP 不受影响 | ✅ | `tcp.MaxConnsPerIP` | “其他 IP 不受影响”只在 Linux 上验证（需要 127.0.0.2） |
+| TCP-24 | P1 | 按 IP 的额度在连接关闭时释放，在 Admit 拒绝时也会退还 | ✅ | `tcp.AdmitRejectionReturnsPerIPSlot`<br>`tcp.PerIPSlotReleasedOnClose` | 压测中两种拒绝同时发生，结束后额度全部归还 |
+| TCP-25 | P1 | IPv6 按前缀归组（默认 /64），IPv4 按单个地址，IPv4 映射地址按 IPv4 处理 | ✅ | `tcp.IPKeyGrouping` |  |
+| TCP-26 | P2 | 远端地址不是 TCP 地址的连接（自定义 listener）不做按 IP 限制 | ✅ | `tcp.PerIPSkipsNonTCPAddresses` |  |
+| TCP-27 | P1 | `MaxConnsPerIP` 为负数、`IPv6PrefixBits` 超出 0～128 时 Listen/NewServer 返回错误 | ✅ | `tcp.PerIPOptionValidation` |  |
 
 ### 3.3 Dialer
 
@@ -224,7 +233,15 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | RES-08 | P1 | `All` 部分成功时会释放已经拿到的许可 | ✅ | `limit.AllReleasesOnPartialFailure` |  |
 | RES-09 | P1 | 参数非法时 panic | ✅ | `limit.NewRateRejectsNonPositive` |  |
 
-### 6.3 Budget
+### 6.3 PerKey
+
+| ID | P | 检查点 | 状态 | 测试 | 说明 |
+|---|---|---|---|---|---|
+| RES-16 | P0 | 每个 key 独立计数，达到上限时拒绝，释放后恢复 | ✅ | `limit.PerKeyLimitsEachKey` |  |
+| RES-17 | P1 | 并发下任何 key 都不超过上限；计数归零后 key 被删除，内存不随历史 key 增长 | ✅ | `limit.PerKeyConcurrentAndForgetsKeys` |  |
+| RES-18 | P1 | 对没有持有额度的 key 调用 Release 会 panic；`max <= 0` 时构造函数 panic | ✅ | `limit.PerKeyMisuse` |  |
+
+### 6.4 Budget
 
 | ID | P | 检查点 | 状态 | 测试 | 说明 |
 |---|---|---|---|---|---|
@@ -367,6 +384,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-07 | TCP 不使用 worker 池复用 goroutine | worker 池是 fasthttp 针对 Web 应用大量短连接的优化；go-netx 面向长连接，新连接很少。实测每个连接只能省约 3µs（新开 goroutine 约 3.5～4.2µs 并有 1 次分配，复用约 0.6µs），约占一次 accept（79µs）的 4%，抵不过管理空闲 worker 增加的复杂度。只有当某个 Gateway 需要处理每秒数万个短连接时，才用该场景的 Benchmark 重新评估 |
 | D-08 | 拒绝连接时不回复协议层消息（不像 fasthttp 回 503） | 传输层不理解协议；需要先回复再关闭的 Gateway 自行在准入逻辑中处理 |
 | D-09 | 不提供每连接独立的 context（不像 net/http 的 ConnContext） | 每个连接要多一次分配，而 Gateway 很少需要；共享的值来自 Serve 的 ctx，连接身份用 `Conn.ID()` |
+| D-10 | `MaxConnsPerIP` 只做单机限制，不做分布式 | 准入检查跑在 accept 循环里，必须本地、不阻塞；负载均衡按源 IP 哈希时，单机限制就等于全局限制。按用户、按会话的全局限制属于 Gateway 业务层；部署在 L4 负载均衡后面时，要确保拿到真实客户端 IP |
 
 ## 12.1 文档一致性
 

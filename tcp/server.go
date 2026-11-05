@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,8 +30,10 @@ var ErrClosed = errors.New("tcp: closed")
 // the Handler returns.
 type Conn struct {
 	net.Conn
-	id  uint64
-	srv *Server
+	id    uint64
+	srv   *Server
+	ipKey netip.Addr // valid when keyed: holds a MaxConnsPerIP slot
+	keyed bool
 }
 
 // ID is unique among connections accepted by this process.
@@ -48,6 +51,18 @@ type Options struct {
 	// Admit is consulted for every accepted connection; rejected
 	// connections are closed immediately and counted. Nil admits all.
 	Admit limit.Limiter
+	// MaxConnsPerIP caps concurrent connections from one client address;
+	// zero means no cap. Rejected connections are closed immediately and
+	// counted in Stats.RejectedPerIP. The limit is local to this server:
+	// behind a load balancer, hash by source IP so each address always
+	// reaches the same node, and make sure the real client address arrives
+	// (an L4 balancer that rewrites it would make every client one IP).
+	MaxConnsPerIP int
+	// IPv6PrefixBits groups IPv6 clients by prefix for MaxConnsPerIP,
+	// because one client can hold a whole /64 and rotate addresses in it.
+	// Zero means 64; 128 counts each address separately. IPv4 (including
+	// IPv4-mapped IPv6) is always counted per address.
+	IPv6PrefixBits int
 	// Socket applies to the listener created by Listen; accepted
 	// connections inherit its buffer sizes. NewServer ignores it.
 	Socket socket.Options
@@ -55,11 +70,12 @@ type Options struct {
 
 // Stats is a point-in-time snapshot.
 type Stats struct {
-	Accepted     uint64
-	Rejected     uint64 // refused by Admit
-	Active       uint64
-	Closed       uint64
-	AcceptErrors uint64 // temporary accept failures, retried with backoff
+	Accepted      uint64
+	Rejected      uint64 // refused by Admit
+	RejectedPerIP uint64 // refused by MaxConnsPerIP
+	Active        uint64
+	Closed        uint64
+	AcceptErrors  uint64 // temporary accept failures, retried with backoff
 }
 
 var lastConnID atomic.Uint64
@@ -70,7 +86,9 @@ type Server struct {
 	handler Handler
 	opts    Options
 
-	accepted, rejected, active, closed, acceptErrors counter.Counter
+	accepted, rejected, rejectedPerIP, active, closed, acceptErrors counter.Counter
+	perIP                                                           *limit.PerKey[netip.Addr]
+	v6bits                                                          int
 
 	mu       sync.Mutex
 	serving  bool
@@ -104,11 +122,25 @@ func NewServer(ln net.Listener, h Handler, o Options) (*Server, error) {
 	if ln == nil || h == nil {
 		return nil, errors.New("tcp: nil listener or handler")
 	}
+	if o.MaxConnsPerIP < 0 {
+		return nil, errors.New("tcp: MaxConnsPerIP must not be negative")
+	}
+	if o.IPv6PrefixBits < 0 || o.IPv6PrefixBits > 128 {
+		return nil, errors.New("tcp: IPv6PrefixBits must be within 0..128")
+	}
 	ctx, abort := context.WithCancel(context.Background())
-	return &Server{
+	s := &Server{
 		ln: ln, handler: h, opts: o, conns: make(map[*Conn]struct{}),
 		ctx: ctx, abort: abort, draining: make(chan struct{}), done: make(chan struct{}),
-	}, nil
+	}
+	if o.MaxConnsPerIP > 0 {
+		s.perIP = limit.NewPerKey[netip.Addr](o.MaxConnsPerIP)
+		s.v6bits = o.IPv6PrefixBits
+		if s.v6bits == 0 {
+			s.v6bits = 64
+		}
+	}
+	return s, nil
 }
 
 func (s *Server) Addr() net.Addr { return s.ln.Addr() }
@@ -171,12 +203,22 @@ func (s *Server) acceptLoop() error {
 			return fmt.Errorf("tcp: accept: %w", err)
 		}
 		delay = 0
+		c := &Conn{Conn: nc, srv: s}
+		if s.perIP != nil {
+			if c.ipKey, c.keyed = ipKey(nc.RemoteAddr(), s.v6bits); c.keyed && !s.perIP.TryAcquire(c.ipKey) {
+				c.keyed = false // holds no slot
+				s.rejectedPerIP.Inc()
+				_ = nc.Close()
+				continue
+			}
+		}
 		if s.opts.Admit != nil && !s.opts.Admit.TryAcquire() {
+			s.releasePerIP(c)
 			s.rejected.Inc()
 			_ = nc.Close()
 			continue
 		}
-		c := &Conn{Conn: nc, id: lastConnID.Add(1), srv: s}
+		c.id = lastConnID.Add(1)
 		if !s.track(c) {
 			s.release(c)
 			_ = nc.Close()
@@ -190,17 +232,52 @@ func (s *Server) acceptLoop() error {
 }
 
 func (s *Server) serveConn(c *Conn) {
+	// Deferred in reverse: close, return admission slots, then count the
+	// connection as closed, so a Closed count never runs ahead of the slots
+	// it frees.
 	defer s.wg.Done()
-	defer s.release(c)
 	defer s.untrack(c)
+	defer s.release(c)
 	defer c.Close()
 	s.handler(s.ctx, c)
 }
 
-func (s *Server) release(*Conn) {
+// release returns every admission slot c holds.
+func (s *Server) release(c *Conn) {
 	if s.opts.Admit != nil {
 		s.opts.Admit.Release()
 	}
+	s.releasePerIP(c)
+}
+
+func (s *Server) releasePerIP(c *Conn) {
+	if c.keyed {
+		c.keyed = false
+		s.perIP.Release(c.ipKey)
+	}
+}
+
+// ipKey returns the MaxConnsPerIP key for a remote address: the IPv4
+// address, or the IPv6 address masked to v6bits. Non-TCP addresses (custom
+// listeners) have no key and are not limited.
+func ipKey(a net.Addr, v6bits int) (netip.Addr, bool) {
+	ta, ok := a.(*net.TCPAddr)
+	if !ok {
+		return netip.Addr{}, false
+	}
+	ip, ok := netip.AddrFromSlice(ta.IP)
+	if !ok {
+		return netip.Addr{}, false
+	}
+	ip = ip.Unmap()
+	if ip.Is6() && v6bits < 128 {
+		p, err := ip.Prefix(v6bits)
+		if err != nil {
+			return netip.Addr{}, false
+		}
+		ip = p.Addr()
+	}
+	return ip, true
 }
 
 func (s *Server) track(c *Conn) bool {
@@ -280,7 +357,7 @@ func (s *Server) Close() error {
 
 func (s *Server) Stats() Stats {
 	return Stats{
-		Accepted: s.accepted.Load(), Rejected: s.rejected.Load(),
+		Accepted: s.accepted.Load(), Rejected: s.rejected.Load(), RejectedPerIP: s.rejectedPerIP.Load(),
 		Active: s.active.Load(), Closed: s.closed.Load(),
 		AcceptErrors: s.acceptErrors.Load(),
 	}

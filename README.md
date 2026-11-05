@@ -21,7 +21,13 @@ buf     pooled buffers with explicit ownership
 ```go
 ln, err := tcp.Listen(ctx, "tcp", ":9000", func(ctx context.Context, c *tcp.Conn) {
 	_, _ = io.Copy(c, c) // the server closes c when the handler returns
-}, tcp.Options{Admit: limit.NewConcurrency(10_000)})
+}, tcp.Options{
+	Admit:         limit.NewConcurrency(10_000),
+	MaxConnsPerIP: 20, // per client address; IPv6 grouped by /64
+	Socket: socket.Options{KeepAlive: socket.KeepAlive{
+		Idle: 30 * time.Second, Interval: 10 * time.Second, Count: 3,
+	}},
+})
 if err != nil {
 	log.Fatal(err)
 }

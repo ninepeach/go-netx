@@ -115,8 +115,8 @@ and rejected when it only pays off for short ones.
 | Temporary accept errors | 5ms→1s backoff, `time.Sleep` | `Timeout` only, fixed 1s sleep | 5ms→1s backoff, interruptible |
 | Permanent error detection | `Temporary()` | string match on the error text | `errors.As` plus a stopped flag |
 | Concurrency cap | none | `Concurrency`, replies 503 | `Admit`, closes and counts |
-| Per-IP cap | none | `MaxConnsPerIP` | planned (below) |
-| TCP keepalive | default 15s, fixed | on/off and period | default 15s, fixed; planned (below) |
+| Per-IP cap | none | `MaxConnsPerIP` | `MaxConnsPerIP`, IPv6 grouped by /64 |
+| TCP keepalive | default 15s, fixed | on/off and period | `socket.Options.KeepAlive`: off, idle, interval, count |
 | Graceful shutdown | close listener, poll idle conns | close listener, poll every 100ms | `Draining()` channel, no polling |
 | After drain timeout | conns keep running | conns keep running | conns aborted automatically |
 | Idle connection memory | buffers held for life | `ReduceMemoryUsage` frees them | none held by the server |
@@ -128,9 +128,9 @@ and rejected when it only pays off for short ones.
 |---|---|---|---|
 | Worker pool | creating goroutines for many short connections | connections are rare events; ~3µs each is noise | rejected (D-07) |
 | 503 on overload | browsers need a status code | the protocol is the gateway's | rejected (D-08) |
-| `MaxConnsPerIP` | one source exhausting connections | same need on a public gateway | planned |
-| Keepalive settings | managing reused idle connections | must detect peers that vanished | planned |
-| `ReduceMemoryUsage` | idle keep-alive connections holding buffers | connections are idle most of the time: the gain is larger | planned (pattern) |
+| `MaxConnsPerIP` | one source exhausting connections | same need on a public gateway | adopted (v1.1.0) |
+| Keepalive settings | managing reused idle connections | must detect peers that vanished | adopted (v1.1.0) |
+| `ReduceMemoryUsage` | idle keep-alive connections holding buffers | connections are idle most of the time: the gain is larger | planned (pattern, below) |
 
 From net/http and from go-netx's own requirements:
 
@@ -170,26 +170,40 @@ Recorded as design decisions D-07 to D-09 in docs/TESTING.md.
 - **Matching error strings, fixed sleeps, polling shutdown**: already done
   better here, as the table shows.
 
-### Planned for v1.1.0
+### Added in v1.1.0
 
-Each item gets checkpoints in docs/TESTING.md before it is implemented.
+1. **Configurable TCP keepalive.** `socket.Options.KeepAlive` sets idle
+   time, probe interval and probe count (`net.KeepAliveConfig`), or
+   disables probes. On a listener it applies to every accepted connection,
+   on a dialer to every dialed one; the zero value keeps Go's default
+   (enabled, 15s). IM gateways use it to notice peers that vanished without
+   a FIN, such as a phone switching networks.
+2. **Per-IP admission, local to one server.** `tcp.Options.MaxConnsPerIP`
+   caps concurrent connections per client address, checked before `Admit`;
+   refusals are counted in `Stats.RejectedPerIP`, and the slot is returned
+   when the connection closes or `Admit` refuses it. IPv6 clients are
+   grouped by prefix (`IPv6PrefixBits`, default 64) because one client can
+   rotate addresses within a /64; IPv4 and IPv4-mapped addresses count per
+   address. The counter is `limit.PerKey`, which forgets keys at zero so
+   memory follows current clients only.
 
-1. **Configurable TCP keepalive.** IM gateways must notice peers that vanish
-   without a FIN (a phone switching networks). Add a keepalive setting to
-   `socket.Options` based on `net.KeepAliveConfig` (idle time, probe
-   interval, probe count), applied to listeners and dialers, with a way to
-   disable it.
-2. **Per-source admission.** Stop one source from taking every connection.
-   `Admit` cannot see the peer, so admission needs the remote address, for
-   example a limiter keyed by address in `limit` and a matching option in
-   `tcp`. Release must be tied to the connection's close, as fasthttp does
-   by wrapping the conn. IPv6 sources must be grouped by prefix (a /64 by
-   default): one client can hold an entire /64 and rotate addresses in it.
-3. **Idle connections hold no buffers** (a gateway pattern, documented with
-   an example rather than built in). 100k idle connections with a 4KB read
-   buffer each pin 400MB. Wait for data with a small buffer, then borrow a
-   large one from `buf.Pool` for the burst and release it when the
-   connection goes quiet, as fasthttp's `ReduceMemoryUsage` does.
+   It is deliberately not distributed (D-10): admission runs in the accept
+   loop and must stay local and non-blocking. With a load balancer that
+   hashes by source IP, every address always reaches the same node and the
+   local cap is the global one. Limits per user or session across nodes
+   belong to the gateway. Behind an L4 load balancer, make sure the real
+   client address arrives (source preservation, or a future PROXY protocol
+   option); otherwise every client looks like the balancer.
+
+### Still planned
+
+- **Idle connections hold no buffers** (a gateway pattern, to be documented
+  with an example rather than built in). 100k idle connections with a 4KB
+  read buffer each pin 400MB. Wait for data with a small buffer, then
+  borrow a large one from `buf.Pool` for the burst and release it when the
+  connection goes quiet, as fasthttp's `ReduceMemoryUsage` does.
+- **PROXY protocol** support, if gateways run behind L4 load balancers that
+  do not preserve the source address.
 
 ## Ownership rules
 
