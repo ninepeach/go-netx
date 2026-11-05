@@ -170,3 +170,92 @@ func BenchmarkEcho(b *testing.B) {
 		cl.Read(in)
 	}
 }
+
+func TestReplyValidatesPacket(t *testing.T) {
+	c := start(t, echo, udp.Options{Readers: 2})
+	if err := c.Reply(nil, []byte("x")); err != udp.ErrNilPacket {
+		t.Fatal(err)
+	}
+	cl := dial(t, c)
+	to := cl.LocalAddr().(*net.UDPAddr).AddrPort()
+	in := make([]byte, 8)
+	for _, reader := range []int{-1, 99} { // not assigned by this Conn
+		if err := c.Reply(&udp.Packet{From: to, Reader: reader}, []byte("ok")); err != nil {
+			t.Fatalf("reader %d: %v", reader, err)
+		}
+		if n, err := cl.Read(in); err != nil || string(in[:n]) != "ok" {
+			t.Fatalf("reader %d: %q %v", reader, in[:n], err)
+		}
+	}
+}
+
+func TestMaxPacketBound(t *testing.T) {
+	if _, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{MaxPacket: 65536}); err == nil {
+		t.Fatal("MaxPacket 65536 accepted")
+	}
+}
+
+func TestKernelDropsEnabled(t *testing.T) {
+	c := start(t, echo, udp.Options{})
+	if want := runtime.GOOS == "linux"; c.Stats().KernelDropsEnabled != want {
+		t.Fatalf("KernelDropsEnabled=%v on %s", c.Stats().KernelDropsEnabled, runtime.GOOS)
+	}
+}
+
+func TestConcurrentWritesAndClose(t *testing.T) {
+	c, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{Readers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go c.Serve(context.Background())
+	to := c.LocalAddr()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			p := &udp.Packet{From: to, Reader: i % 2}
+			for j := 0; j < 500; j++ {
+				var err error
+				if j%2 == 0 {
+					err = c.WriteTo([]byte("x"), to)
+				} else {
+					err = c.Reply(p, []byte("y"))
+				}
+				if err != nil && err != udp.ErrClosed {
+					t.Errorf("unexpected error: %v", err)
+					return
+				}
+			}
+		}(i)
+	}
+	time.Sleep(5 * time.Millisecond)
+	c.Close()
+	wg.Wait()
+}
+
+func TestConcurrentShutdown(t *testing.T) {
+	c, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{Readers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.Serve(context.Background()) }()
+	time.Sleep(5 * time.Millisecond)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := c.Shutdown(ctx); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

@@ -2,7 +2,8 @@
 
 ## v1.0.1
 
-Fixes from a module-by-module review. No API removals.
+Fixes from module-by-module reviews. No API removals; additions are
+`udp.MaxDatagram`, `udp.ErrNilPacket` and `udp.Stats.KernelDropsEnabled`.
 
 - netx: `OnStop` gets its own `ShutdownTimeout` budget instead of the
   drain's possibly expired context.
@@ -13,6 +14,15 @@ Fixes from a module-by-module review. No API removals.
   wraparound instead of freezing at 2^32.
 - udp: `MaxPacket` only sizes the receive buffer; sends are limited by the
   new `udp.MaxDatagram` (65527).
+- udp: `Close` interrupts a reader's error backoff instead of waiting up to
+  a second.
+- udp: `Reply` returns `ErrNilPacket` for nil and falls back to `WriteTo`'s
+  socket choice for a `Reader` index it did not assign, instead of
+  panicking.
+- udp: `Listen` rejects `MaxPacket` above 65535; `Readers` sizing is
+  documented as the caller's responsibility.
+- udp: `Stats.KernelDropsEnabled` tells "no drops" apart from "drops not
+  measured".
 - socket/tcp/udp: `RecvBuffer` and `SendBuffer` are applied before bind.
   TCP listeners pass them to accepted connections, so there are no
   per-connection syscalls and window scaling sees the larger buffer.

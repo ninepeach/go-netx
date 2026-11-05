@@ -67,7 +67,10 @@ type Handler func(c *Conn, p *Packet)
 
 // Options configures a Conn.
 type Options struct {
-	// Readers is the number of reader goroutines. Default 1.
+	// Readers is the number of reader goroutines, each holding a MaxPacket
+	// receive buffer; with ReusePort, also the number of sockets. Default 1.
+	// go-netx does not cap it: sizing it to the host is the caller's job,
+	// typically no more than the number of CPUs.
 	Readers int
 	// MaxPacket is the receive buffer size per reader. Larger incoming
 	// datagrams are dropped and counted as Truncated. It does not limit
@@ -85,7 +88,11 @@ type Stats struct {
 	Truncated   uint64 // datagrams larger than MaxPacket, dropped (all platforms)
 	RecvErrors  uint64 // transient errors retried with backoff, plus a final fatal one
 	SendErrors  uint64
-	KernelDrops uint64 // receive queue overflows reported by the kernel (Linux)
+	KernelDrops uint64 // receive queue overflows reported by the kernel
+	// KernelDropsEnabled reports whether the kernel agreed to report drops
+	// on every socket (Linux SO_RXQ_OVFL). When false, KernelDrops is 0
+	// because it is not measured, not because nothing was dropped.
+	KernelDropsEnabled bool
 }
 
 type readerStats struct {
@@ -134,7 +141,9 @@ type Conn struct {
 	closed    bool
 	fatal     error         // first unrecoverable read error
 	done      chan struct{} // closed when Serve returns
+	closing   chan struct{} // closed by Close; wakes readers in backoff
 	closeOnce sync.Once
+	dropsOn   bool // kernel drop counting enabled on every socket
 }
 
 // Listen binds network ("udp", "udp4", "udp6") at address.
@@ -144,6 +153,9 @@ func Listen(ctx context.Context, network, address string, h Handler, o Options) 
 	}
 	if o.Readers < 0 || o.MaxPacket < 0 {
 		return nil, errors.New("udp: options must not be negative")
+	}
+	if o.MaxPacket > 65535 {
+		return nil, errors.New("udp: MaxPacket above 65535 can never be filled")
 	}
 	if o.Readers == 0 {
 		o.Readers = 1
@@ -156,7 +168,7 @@ func Listen(ctx context.Context, network, address string, h Handler, o Options) 
 		nsock = o.Readers
 	}
 	lc := socket.ListenConfig(o.Socket)
-	c := &Conn{handler: h, max: o.MaxPacket, done: make(chan struct{})}
+	c := &Conn{handler: h, max: o.MaxPacket, done: make(chan struct{}), closing: make(chan struct{}), dropsOn: true}
 	for i := 0; i < nsock; i++ {
 		pc, err := lc.ListenPacket(ctx, network, address)
 		if err != nil {
@@ -170,8 +182,8 @@ func Listen(ctx context.Context, network, address string, h Handler, o Options) 
 			c.local = uc.LocalAddr().(*net.UDPAddr).AddrPort()
 			address = c.local.String()
 		}
-		if rc, err := uc.SyscallConn(); err == nil {
-			sys.EnableDropCount(rc)
+		if rc, err := uc.SyscallConn(); err != nil || !sys.EnableDropCount(rc) {
+			c.dropsOn = false
 		}
 	}
 	c.drops = make([]dropCounter, nsock)
@@ -265,8 +277,14 @@ func (c *Conn) readFailed(st *readerStats, err error, backoff *time.Duration) bo
 	case sys.Transient:
 		st.recvErrors.Inc()
 		*backoff = min(max(*backoff*2, 5*time.Millisecond), time.Second)
-		time.Sleep(*backoff)
-		return false
+		timer := time.NewTimer(*backoff)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return false
+		case <-c.closing:
+			return true // Close during backoff: stop now, not after it
+		}
 	}
 	st.recvErrors.Inc()
 	c.mu.Lock()
@@ -284,8 +302,18 @@ func (c *Conn) WriteTo(b []byte, to netip.AddrPort) error {
 	return c.write(int(to.Port())%len(c.socks), b, to)
 }
 
-// Reply sends b to p.From through the socket that received p.
+// ErrNilPacket is returned by Reply for a nil packet.
+var ErrNilPacket = errors.New("udp: nil packet")
+
+// Reply sends b to p.From through the socket that received p. A Reader
+// index this Conn did not assign falls back to WriteTo's socket choice.
 func (c *Conn) Reply(p *Packet, b []byte) error {
+	if p == nil {
+		return ErrNilPacket
+	}
+	if p.Reader < 0 || p.Reader >= len(c.readers) {
+		return c.WriteTo(b, p.From)
+	}
 	return c.write(p.Reader%len(c.socks), b, p.From)
 }
 
@@ -332,6 +360,7 @@ func (c *Conn) Close() error {
 		c.mu.Lock()
 		c.closed = true
 		c.mu.Unlock()
+		close(c.closing)
 		c.closeSockets()
 	})
 	return nil
@@ -345,7 +374,7 @@ func (c *Conn) closeSockets() {
 
 // Stats returns a snapshot summed over readers and sockets.
 func (c *Conn) Stats() Stats {
-	var s Stats
+	s := Stats{KernelDropsEnabled: c.dropsOn}
 	for i := range c.readers {
 		r := &c.readers[i]
 		s.RecvPackets += r.recvPackets.Load()

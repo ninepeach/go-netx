@@ -1,3 +1,5 @@
+//go:build unix
+
 package udp
 
 import (
@@ -5,16 +7,12 @@ import (
 	"errors"
 	"net"
 	"os"
-	"runtime"
 	"syscall"
 	"testing"
 	"time"
 )
 
 func TestFatalReadErrorStopsServe(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("errno values differ")
-	}
 	c, err := Listen(context.Background(), "udp", "127.0.0.1:0", func(*Conn, *Packet) {}, Options{Readers: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -42,5 +40,31 @@ func TestFatalReadErrorStopsServe(t *testing.T) {
 	}
 	if s := c.Stats(); s.RecvErrors != 2 {
 		t.Fatalf("%+v", s)
+	}
+}
+
+func TestCloseInterruptsBackoff(t *testing.T) {
+	c, err := Listen(context.Background(), "udp", "127.0.0.1:0", func(*Conn, *Packet) {}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	backoff := 500 * time.Millisecond // next wait would be 1s
+	transient := &net.OpError{Op: "read", Err: os.NewSyscallError("recvmsg", syscall.ENOBUFS)}
+	stopped := make(chan bool)
+	go func() { stopped <- c.readFailed(&c.readers[0], transient, &backoff) }()
+	time.Sleep(20 * time.Millisecond)
+	start := time.Now()
+	c.Close()
+	select {
+	case stop := <-stopped:
+		if !stop {
+			t.Fatal("reader not told to stop after Close")
+		}
+		if d := time.Since(start); d > 200*time.Millisecond {
+			t.Fatalf("Close waited %v for the backoff", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("backoff not interrupted")
 	}
 }
