@@ -73,19 +73,16 @@ func TestZeroAndNegativeBuffersAreNotApplied(t *testing.T) {
 }
 
 // Checks: SOCK-05
-func TestFastOpenAppliesOrReturnsUnsupported(t *testing.T) {
+func TestFastOpenAppliesOnLinux(t *testing.T) {
 	lc := socket.ListenConfig(socket.Options{
 		FastOpen: socket.FastOpenOptions{Enabled: true, Backlog: 64},
 	})
 	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
-		if socket.IsUnsupported(err) {
-			return
-		}
-		t.Fatal(err)
+		t.Fatal(err) // never an error, even on a kernel without Fast Open
 	}
 	defer ln.Close()
-	if got := socketIntOption(t, ln.(*net.TCPListener), syscall.IPPROTO_TCP, tcpFastOpen); got <= 0 {
+	if got := socketIntOption(t, ln.(*net.TCPListener), syscall.IPPROTO_TCP, tcpFastOpen); got != 64 {
 		t.Fatalf("TCP_FASTOPEN=%d, want enabled", got)
 	}
 }

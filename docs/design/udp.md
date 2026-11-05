@@ -25,7 +25,7 @@ type Packet struct {
 type Options struct {
     Readers   int // default 1; with ReusePort, one socket each
     MaxPacket int // size of each receive buffer; default and max MaxDatagram
-    Batch     int // datagrams per recvmmsg; Linux default 8, max 1024; 1 elsewhere
+    Batch     int // datagrams per recvmmsg; Linux default 8, max 1024; 1 in effect elsewhere
     Socket    socket.Options
 }
 const MaxDatagram = 65000 // size limit for sends and receives
@@ -35,6 +35,7 @@ func (*Conn) Close() error
 func (*Conn) WriteTo(b []byte, to netip.AddrPort) error
 func (*Conn) Reply(p *Packet, b []byte) error
 func (*Conn) LocalAddr() netip.AddrPort
+func (*Conn) Batch() int // batch size in effect
 func (*Conn) Stats() Stats
 var ErrClosed, ErrTooLarge, ErrNilPacket
 ```
@@ -57,9 +58,11 @@ handler is still called once per datagram, in arrival order, and
 the next system call, after every handler of the batch has returned. Each
 slot has its own address and control buffer, so `From`, `Truncated` and
 `KernelDrops` work per datagram as with one read. `Batch: 1` keeps the
-single `ReadMsgUDPAddrPort` loop. Platforms without `recvmmsg` default to
-1, and an explicit `Batch` > 1 there is an error rather than a silent
-fallback. Memory per reader is `Batch × MaxPacket`: about 520KB with the
+single `ReadMsgUDPAddrPort` loop. Batching only changes performance, so
+on platforms without `recvmmsg` (macOS, Windows) any `Batch` runs as 1 and
+the same configuration works on a development Mac (D-18); the bounds
+(0…1024) are checked everywhere, and `Conn.Batch()` reports the size in
+effect. Memory per reader is `Batch × MaxPacket`: about 520KB with the
 defaults (8 × 65000), 16KB with `MaxPacket: 2048`, so a gateway with
 small datagrams should set `MaxPacket`. Link-local IPv6 senders get their
 zone from the interface name, looked up once per interface and cached per
@@ -131,11 +134,12 @@ scheduler work per read is spread over the batch too. 32 adds little over
 ## 7. Decisions
 
 D-01 (`Readers` not capped), D-02 (one limit, 65000, both directions), D-03
-(no handler context), D-17 (recvmmsg batching on by default on Linux).
+(no handler context), D-17 (recvmmsg batching on by default on Linux), D-18 (performance
+options degrade where unavailable).
 
 ## 8. Testing
 
-UDP-01…UDP-36, SYS-05/06, OBS-03…OBS-05, NF-04/08/12 in
+UDP-01…UDP-37, SYS-05/06, OBS-03…OBS-05, NF-04/08/12 in
 [docs/TESTING.md](../TESTING.md). UDP-20 (IPv6) is written but has not
 run on an IPv6 host yet.
 

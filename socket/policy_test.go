@@ -2,6 +2,7 @@ package socket_test
 
 import (
 	"context"
+	"io"
 	"net"
 	"runtime"
 	"testing"
@@ -9,16 +10,44 @@ import (
 	"github.com/ninepeach/go-netx/socket"
 )
 
-// Fast Open must fail explicitly on platforms where it is unavailable.
-// Checks: SOCK-06, SOCK-08
-func TestFastOpenUnsupportedPlatforms(t *testing.T) {
-	if runtime.GOOS == "linux" {
-		t.Skip("Linux support depends on the running kernel; covered by Linux tests")
+// One configuration with Fast Open works on every platform: where Fast
+// Open is unavailable the sockets run without it.
+// Checks: SOCK-06
+func TestFastOpenConfigurationRunsEverywhere(t *testing.T) {
+	opts := socket.Options{FastOpen: socket.FastOpenOptions{Enabled: true, Backlog: 16}}
+	lc := socket.ListenConfig(opts)
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen with Fast Open on %s: %v", runtime.GOOS, err)
 	}
-	lc := socket.ListenConfig(socket.Options{FastOpen: socket.FastOpenOptions{Enabled: true}})
-	_, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-	if err == nil || !socket.IsUnsupported(err) {
-		t.Fatalf("expected unsupported error, got %v", err)
+	defer ln.Close()
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			c.Write([]byte("ok"))
+			c.Close()
+		}
+	}()
+	d := socket.Dialer(net.Dialer{}, opts)
+	c, err := d.DialContext(context.Background(), "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial with Fast Open on %s: %v", runtime.GOOS, err)
+	}
+	defer c.Close()
+	b := make([]byte, 2)
+	if _, err := io.ReadFull(c, b); err != nil || string(b) != "ok" {
+		t.Fatalf("read %q, %v", b, err)
+	}
+}
+
+// Checks: SOCK-27
+func TestSupportedMatchesPlatform(t *testing.T) {
+	want := map[string]socket.Capabilities{
+		"linux":   {FastOpenListen: true, FastOpenDial: true, ReusePortBalanced: true},
+		"darwin":  {FastOpenListen: true},
+		"freebsd": {ReusePortBalanced: true},
+	}[runtime.GOOS]
+	if got := socket.Supported(); got != want {
+		t.Fatalf("Supported() on %s = %+v, want %+v", runtime.GOOS, got, want)
 	}
 }
 

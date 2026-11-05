@@ -27,13 +27,19 @@
   1.2µs (2 vCPU), with no added latency and 0 allocations; the handler
   contract is unchanged. Memory per reader becomes `Batch × MaxPacket`
   (about 520KB with the defaults); set `MaxPacket` for small datagrams.
-  `Batch` > 1 where `recvmmsg` is unavailable is an error.
+  Where `recvmmsg` is unavailable (macOS, Windows) any `Batch` reads one
+  datagram per call; `Conn.Batch()` reports the size in effect.
+- socket: `Supported()` reports which performance options the platform
+  implements (`FastOpenListen`, `FastOpenDial`, `ReusePortBalanced`).
+- socket: TCP Fast Open on macOS listeners (`TCP_FASTOPEN`).
 
 ### Changed
 
-- socket: remove `UnsupportedPolicy` and `UnsupportedIgnore`.
-  Requested socket options now fail explicitly when unsupported; there is
-  no silent fallback mode. **Breaking:** see Migration.
+- socket: remove `UnsupportedPolicy` and `UnsupportedIgnore`. One
+  configuration now runs on every platform: options that only affect
+  performance (Fast Open, `udp.Options.Batch`) run without the
+  optimisation where unavailable, and options that change behaviour fail
+  with `UnsupportedOptionError`. **Breaking:** see Migration.
 - tcp: admission slots are returned before a connection is counted as
   `Closed`, so a `Closed` count never runs ahead of the slots it frees.
 - socket: options that do not fit the network are refused with
@@ -53,9 +59,9 @@
 
 ### Migration
 
-- Remove the `Unsupported` field from `FastOpenOptions`. Handle
-  `UnsupportedOptionError` and omit Fast Open when the target platform or
-  kernel does not support it.
+- Remove the `Unsupported` field from `FastOpenOptions`. Nothing else is
+  needed: where Fast Open is unavailable the socket is created without it,
+  as `UnsupportedIgnore` did; use `socket.Supported()` to check.
 
 ## v1.0.0
 

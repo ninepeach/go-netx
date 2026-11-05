@@ -14,9 +14,6 @@ const BatchSupported = false
 // DefaultBatch is 1 where batching is unavailable.
 const DefaultBatch = 1
 
-// MaxBatch is 1 where batching is unavailable.
-const MaxBatch = 1
-
 // BatchReader is unavailable on this platform; udp never creates one.
 type BatchReader struct{}
 

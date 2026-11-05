@@ -5,7 +5,6 @@ package socket_test
 import (
 	"context"
 	"net"
-	"runtime"
 	"syscall"
 	"testing"
 
@@ -139,29 +138,5 @@ func TestSetBuffersOnExistingConnection(t *testing.T) {
 	}
 	if got := socketIntOption(t, client.(*net.TCPConn), syscall.SOL_SOCKET, syscall.SO_SNDBUF); got < requested {
 		t.Fatalf("SO_SNDBUF=%d, want at least %d", got, requested)
-	}
-}
-
-// Checks: SOCK-06
-func TestUnsupportedOptionsAreExplicitOnDarwin(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("Darwin-specific unsupported-option contract")
-	}
-	for _, tc := range []struct {
-		name string
-		opts socket.Options
-	}{
-		{
-			name: "TCP Fast Open",
-			opts: socket.Options{FastOpen: socket.FastOpenOptions{Enabled: true}},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			lc := socket.ListenConfig(tc.opts)
-			_, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
-			if err == nil || !socket.IsUnsupported(err) {
-				t.Fatalf("expected explicit unsupported-option error, got %v", err)
-			}
-		})
 	}
 }
