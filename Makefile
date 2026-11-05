@@ -1,4 +1,4 @@
-.PHONY: fmt fmtcheck test race vet bench testdoc doccheck cross check verify examples clean
+.PHONY: fmt fmtcheck test race vet bench testdoc doccheck cross stress fuzz check verify examples clean
 
 PLATFORMS := linux/amd64 linux/386 darwin/arm64 windows/amd64 freebsd/amd64 js/wasm
 
@@ -20,6 +20,7 @@ race:
 
 vet:
 	go vet ./...
+	go vet -tags stress ./...
 
 bench:
 	go test -run '^$$' -bench . -benchmem ./...
@@ -34,6 +35,23 @@ cross:
 	@for p in $(PLATFORMS); do \
 		echo "vet $$p"; \
 		GOOS=$${p%/*} GOARCH=$${p#*/} go vet ./... || exit 1; \
+		GOOS=$${p%/*} GOARCH=$${p#*/} go vet -tags stress ./... || exit 1; \
+	done
+
+# Stress tests live behind the stress build tag. NETX_STRESS_SECONDS sets
+# the long-run duration (default 3).
+stress:
+	go test -race -tags stress -count=1 -run Stress ./...
+	go test -race -tags 'stress netxdebug' -count=1 -run Stress ./...
+
+FUZZTIME ?= 30s
+FUZZ_TARGETS := FuzzDropCount:./internal/sys FuzzTableOps:./flow FuzzRingOps:./queue \
+	FuzzGetRelease:./buf FuzzReplyAndWriteTo:./udp
+
+fuzz:
+	@for t in $(FUZZ_TARGETS); do \
+		echo "fuzz $${t%%:*} ($(FUZZTIME))"; \
+		go test -run '^$$' -fuzz "^$${t%%:*}$$" -fuzztime $(FUZZTIME) $${t#*:} || exit 1; \
 	done
 
 check: test race vet

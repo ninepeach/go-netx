@@ -97,7 +97,11 @@ type Stats struct {
 	Truncated   uint64 // datagrams larger than MaxPacket, dropped (all platforms)
 	RecvErrors  uint64 // transient errors retried with backoff, plus a final fatal one
 	SendErrors  uint64
-	KernelDrops uint64 // receive queue overflows reported by the kernel
+	// KernelDrops counts datagrams the kernel dropped because the receive
+	// queue was full. The kernel reports the count along with the next
+	// datagram it queues, so drops after the last queued datagram appear
+	// only once another one arrives.
+	KernelDrops uint64
 	// KernelDropsEnabled reports whether the kernel agreed to report drops
 	// on every socket (Linux SO_RXQ_OVFL). When false, KernelDrops is 0
 	// because it is not measured, not because nothing was dropped.

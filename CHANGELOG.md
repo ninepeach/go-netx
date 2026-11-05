@@ -3,9 +3,13 @@
 ## v1.0.0
 
 First stable release. Rewrite around the frozen package layout in
-ARCHITECTURE.md; not compatible with v0.x. Every P0 and P1 checkpoint in
-docs/TESTING.md is covered by a test, and the document is kept in sync with
-the tests mechanically (`make verify`).
+ARCHITECTURE.md; not compatible with v0.x.
+
+Every checkpoint in docs/TESTING.md is covered except UDP-20 (IPv6 send
+boundary: test written, not yet run on an IPv6 host). Coverage includes
+fuzz tests (`make fuzz`), stress tests with goroutine and file-descriptor
+leak checks (`make stress`) and benchmarks. The document is kept in sync
+with the tests mechanically (`make verify`).
 
 ### Added
 

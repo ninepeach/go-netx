@@ -150,3 +150,27 @@ func TestConcurrentGetNeverShares(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// Checks: BUF-11
+func TestPoolCorrectAcrossGC(t *testing.T) {
+	budget := limit.NewBudget(1 << 20)
+	p := NewPool(budget)
+	for round := 0; round < 5; round++ {
+		held := make([]*Buf, 0, 16)
+		for i := 0; i < 16; i++ {
+			b := p.Get(1000 + i)
+			if b == nil || len(b.B) != 1000+i {
+				t.Fatalf("round %d: bad buffer", round)
+			}
+			held = append(held, b)
+		}
+		for _, b := range held {
+			b.Release()
+		}
+		runtime.GC() // sync.Pool may drop everything; the pool must not care
+		runtime.GC()
+		if budget.Used() != 0 {
+			t.Fatalf("round %d: used=%d", round, budget.Used())
+		}
+	}
+}

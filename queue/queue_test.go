@@ -306,3 +306,33 @@ func TestMultiConsumerNoLossNoDuplicate(t *testing.T) {
 		}
 	}
 }
+
+// Checks: QUEUE-15
+func TestStatsCountEveryOutcome(t *testing.T) {
+	var dropped []int
+	r := New(Options[int]{Cap: 2, Policy: DropOldest, OnDrop: func(v int) { dropped = append(dropped, v) }})
+	for i := 0; i < 5; i++ {
+		r.Push(i) // 2 kept, 3 evicted
+	}
+	r.Pop()
+	r.Close()
+	r.Push(9) // rejected after close
+	r.Drain() // 1 left, dropped
+	want := Stats{Len: 0, Pushed: 5, Popped: 1, Dropped: 4, Rejected: 1}
+	if got := r.Stats(); got != want {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+	if len(dropped) != 4 {
+		t.Fatalf("OnDrop saw %v", dropped)
+	}
+
+	rej := New(Options[int]{Cap: 1})
+	rej.Push(1)
+	rej.Push(2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	rej.PushWait(ctx, 3) // times out: not counted as anything
+	if got := rej.Stats(); got != (Stats{Len: 1, Pushed: 1, Rejected: 1}) {
+		t.Fatalf("reject queue: %+v", got)
+	}
+}

@@ -119,7 +119,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | TCP-19 | P1 | 关闭期间 accept 进来的连接不会漏登记，也不会泄漏 | ✅ | `tcp.ConnAcceptedDuringStopIsReleased` |  |
 | TCP-20 | P1 | Serve 的 ctx 被取消等价于 abort | ✅ | `tcp.ServeContextCancelAborts` |  |
 | TCP-21 | P1 | handler 能读到 Serve ctx 中的值 | ✅ | `tcp.HandlerSeesServeContextValues` |  |
-| TCP-22 | P2 | 大量连接建立和断开后，goroutine 和 FD 数量不持续增长 | ❌ |  | 见 NF-18 |
+| TCP-22 | P2 | 大量连接建立和断开后，goroutine 和 FD 数量不持续增长 | ✅ | `tcp.StressTCPChurn` | 压测，`make stress` |
 
 ### 3.3 Dialer
 
@@ -152,7 +152,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | UDP-10 | P1 | 退避期间调用 Close 能立即唤醒 | ✅ | `backoff.WaitStopsEarly`<br>`udp.CloseInterruptsBackoff` |  |
 | UDP-11 | P1 | 致命错误关闭整个 Conn，所有读循环退出，Serve 返回该错误 | ✅ | `udp.FatalReadErrorStopsServe` |  |
 | UDP-12 | P1 | 关闭、ctx 取消后所有读循环退出，再次 Serve 返回 `ErrClosed` | ✅ | `udp.ServeAfterCloseAndContextCancel` |  |
-| UDP-13 | P2 | `Readers` 为 0 时取默认值、为负数时拒绝；上限 | ⚠️ | `udp.ListenOptionBoundaries` | 覆盖了 0 和负数；上限交给调用方，见 D-01 |
+| UDP-13 | P2 | `Readers` 为 0 时取默认值、为负数时拒绝；不设上限（D-01） | ✅ | `udp.ListenOptionBoundaries` | 上限按 D-01 交给调用方 |
 | UDP-14 | P2 | `MaxPacket` 为 0 时取默认值、为负数时拒绝、超过 `MaxDatagram` 时拒绝 | ✅ | `udp.ListenOptionBoundaries`<br>`udp.MaxPacketBound` | 0 和负数、上限都已覆盖 |
 | UDP-15 | P2 | 读循环的 handler 路径零分配 | ✅ | `udp.HandlerDoesNotAllocate` |  |
 
@@ -180,7 +180,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | UDP-28 | P1 | 32 位计数回绕后，累计值仍然正确 | ✅ | `udp.DropCounterWraps` |  |
 | UDP-29 | P1 | 共享同一 socket 的多个读循环上报的旧值不会被重复累加 | ✅ | `udp.DropCounterWrapAndStaleReports`<br>`udp.DropCounterWraps` |  |
 | UDP-30 | P1 | cmsg 解析：能找到目标项，忽略无关项，拒绝截断数据和虚报长度 | ✅ | `sys.DropCountParse` |  |
-| UDP-31 | P2 | 真实丢包场景下计数会增加 | ❌ |  | 需要压测：缓冲区设小，并让 handler 变慢 |
+| UDP-31 | P2 | 真实丢包场景下计数会增加 | ✅ | `udp.StressKernelDropsAccounting` | 压测，仅 Linux；断言“收到数 + 内核丢包数 = 发送数”。内核在下一个入队的数据报上才上报丢包，见 `Stats.KernelDrops` 的注释 |
 
 ## 5. flow：Flow 表
 
@@ -199,7 +199,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | FLOW-11 | P1 | 传入更早的时间时时钟不会倒退 | ✅ | `flow.SweepClockNeverMovesBackward` |  |
 | FLOW-12 | P1 | 多个 Sweep 并发执行时不会重复调用 `OnClose` | ✅ | `flow.ConcurrentRemovalClosesFlowOnce`<br>`flow.ConcurrentSweepsCloseOnce` |  |
 | FLOW-13 | P1 | Run 退出时关闭所有 flow | ✅ | `flow.RunClosesAllOnExit` |  |
-| FLOW-14 | P2 | 大量 flow 下 Sweep 的耗时（文档写的是每百万约 20ms） | ❌ |  | 需要 Benchmark |
+| FLOW-14 | P2 | 大量 flow 下 Sweep 的耗时 | ✅ | `flow.BenchmarkSweepBySize` | 实测（2 vCPU）：1 万 flow 约 0.16ms，10 万约 3.4ms，100 万约 105ms；单个 flow 的成本随规模上升，原因是缓存未命中 |
 | FLOW-15 | P2 | 不同 key 哈希冲突时不会被合并 | ➖ |  | 用的是 Go map，key 按值比较，哈希只用来选分片 |
 | FLOW-16 | P2 | 查找零分配 | ✅ | `flow.BenchmarkGetAddrPort` |  |
 
@@ -253,7 +253,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | QUEUE-12 | P1 | Drain 把剩余元素逐个交给 `OnDrop` | ✅ | `queue.DrainReleases` |  |
 | QUEUE-13 | P1 | 多生产者、单消费者：不丢失、不重复 | ✅ | `queue.ConcurrentNoLoss` |  |
 | QUEUE-14 | P1 | 多消费者：不丢失、不重复，也不会丢失唤醒信号 | ✅ | `queue.MultiConsumerNoLossNoDuplicate` |  |
-| QUEUE-15 | P2 | Stats 的各项计数与实际操作一致 | ⚠️ | `queue.RejectKeepsOwnership` | 只检查了 Rejected 和 Len |
+| QUEUE-15 | P2 | Stats 的各项计数与实际操作一致 | ✅ | `queue.RejectKeepsOwnership`<br>`queue.StatsCountEveryOutcome` |  |
 | QUEUE-16 | P2 | Push 和 Pop 零分配 | ✅ | `queue.BenchmarkPushPop` |  |
 | QUEUE-17 | P1 | Close 与并发 Push 同时发生时，长度不超过容量，关闭后拒绝新元素 | ✅ | `queue.CloseRacingPushPreservesBound` |  |
 
@@ -271,7 +271,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | BUF-08 | P1 | 并发 Get 不会返回同一块正在使用的内存 | ✅ | `buf.ConcurrentGetNeverShares` |  |
 | BUF-09 | P1 | 负数大小时 panic | ✅ | `buf.GetNegativeSizePanics` |  |
 | BUF-10 | P1 | 扩容、Reset | ➖ |  | 没有这两个 API，Buf 的大小固定 |
-| BUF-11 | P2 | GC 回收池中对象后，正确性不受影响 | ❌ |  | sync.Pool 的语义保证了这一点，但没有测试；可以在 Get/Release 之间调用 runtime.GC() 验证 |
+| BUF-11 | P2 | GC 回收池中对象后，正确性不受影响 | ✅ | `buf.PoolCorrectAcrossGC` |  |
 | BUF-12 | P2 | 热路径零分配 | ✅ | `buf.BenchmarkGetRelease` |  |
 | BUF-13 | P1 | Release 后 `B` 被置为 nil，避免继续使用旧的切片 | ✅ | `buf.ReleaseClearsViewAndRefundsUnpooledCapacity` |  |
 | BUF-14 | P1 | 预算不足时不会先扣掉一部分 | ✅ | `buf.BudgetRejectsLargeBufferWithoutPartialCharge` |  |
@@ -311,7 +311,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | RUN-13 | P1 | `Group`：一个服务出错，其余服务被 abort | ✅ | `netx.GroupAbortsOthersOnError` |  |
 | RUN-14 | P1 | `Group`：Shutdown 并发进行，错误合并返回 | ✅ | `netx.GroupShutdownJoinsErrors`<br>`netx.GroupWithRealTransports` |  |
 | RUN-15 | P2 | 连续收到多次信号不会死锁 | ✅ | `netx.ConcurrentStopAndShutdown`<br>`netx.RepeatedSignalsDoNotDeadlock` | 仅 unix；信号之间留出间隔，避免内核合并同类信号 |
-| RUN-16 | P2 | 停止后后台 goroutine 全部退出 | ❌ |  | 见 NF-18 |
+| RUN-16 | P2 | 停止后后台 goroutine 全部退出 | ✅ | `netx.StopReleasesGoroutinesAndSockets` | 用 internal/leak 检查 goroutine 和文件描述符 |
 
 ## 11. 集成测试
 
@@ -325,7 +325,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | INT-06 | P1 | 队列满时 DropOldest 释放缓冲区，不泄漏 | ✅ | `integration.FullQueueReleasesEvictedBuffers`<br>`integration.UDPGatewayComposition` |  |
 | INT-07 | P1 | Budget 耗尽时丢包，恢复后继续正常工作 | ✅ | `integration.BudgetExhaustionDropsThenRecovers` |  |
 | INT-08 | P1 | TCP 在 drain 期间，长连接收到 `Draining` 信号后主动退出 | ✅ | `integration.TCPDrainingGoAway` |  |
-| INT-09 | P2 | 长时间运行，FD、内存、goroutine 都不泄漏 | ❌ |  | 见 NF-18 |
+| INT-09 | P2 | 长时间运行，FD、内存、goroutine 都不泄漏 | ✅ | `integration.StressGatewayLongRun` | 压测，`make stress`；时长用 `NETX_STRESS_SECONDS` 设置，默认 3 秒，已跑过 15 秒 |
 
 ## 12. 回归清单与已知问题
 
@@ -363,6 +363,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-03 | UDP handler 没有 ctx，也不能被中断 | 换取零分配、无额外 goroutine；需要等待的工作交给 Gateway 的队列 |
 | D-04 | `Concurrency.TryAcquire` 不阻塞 | Admission 只回答“现在能不能进”，排队属于 queue 的职责 |
 | D-05 | Buf 的预算只统计正在使用的内存 | sync.Pool 中闲置的内存会被 GC 回收，无法也不需要计入 |
+| D-06 | 暂不把 Sweep 改为增量式（待定） | 100 万个 flow 每次 Sweep 约 105ms，按 1 秒一次约占一个核 10%。目前各 Gateway 的规模远小于此，改为增量会增加复杂度；flow 数量接近百万时再改为每次只扫一部分分片 |
 
 ## 12.1 文档一致性
 
@@ -376,23 +377,23 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 |---|---|---|---|---|---|
 | NF-01 | Race | 所有包 | ⚙️ |  | `go test -race ./...` |
 | NF-02 | Race | Debug 构建 | ⚙️ |  | `go test -race -tags netxdebug ./...` |
-| NF-03 | Stress | TCP 大量并发连接 | ❌ |  |  |
-| NF-04 | Stress | UDP 高并发读写，并真正触发内核丢包 | ❌ |  |  |
-| NF-05 | Stress | Flow 并发创建与清理 | ⚠️ | `flow.ActiveFlowSurvivesSweep`<br>`flow.ConcurrentRemovalClosesFlowOnce`<br>`flow.GetOrOpenConcurrentSingleCreation` |  |
+| NF-03 | Stress | TCP 大量并发连接 | ✅ | `tcp.StressTCPChurn` | `make stress` |
+| NF-04 | Stress | UDP 高并发读写，并真正触发内核丢包 | ✅ | `udp.StressUDPEchoManySenders` | `make stress` |
+| NF-05 | Stress | Flow 并发创建与清理 | ✅ | `flow.ActiveFlowSurvivesSweep`<br>`flow.ConcurrentRemovalClosesFlowOnce`<br>`flow.GetOrOpenConcurrentSingleCreation`<br>`flow.StressTableChurn` | `make stress` |
 | NF-06 | Stress | Queue 多生产者、多消费者 | ✅ | `queue.ConcurrentNoLoss`<br>`queue.MultiConsumerNoLossNoDuplicate` |  |
-| NF-07 | Fuzz | `DropCount` 解析任意字节不会 panic | ❌ |  | 解析外部输入，最适合 fuzz |
-| NF-08 | Fuzz | UDP Packet 参数 | ❌ |  |  |
-| NF-09 | Fuzz | Flow 状态机的随机操作序列 | ❌ |  |  |
-| NF-10 | Fuzz | Queue 的随机操作序列，检查不变量 | ❌ |  |  |
-| NF-11 | Fuzz | Buf 的随机 Get/Release 序列 | ❌ |  |  |
+| NF-07 | Fuzz | `DropCount` 解析任意字节不会 panic | ✅ | `sys.FuzzDropCount` | 种子语料随 `go test` 运行；`make fuzz` 对每个目标做长时间 fuzz |
+| NF-08 | Fuzz | UDP 的 Reply 和 WriteTo 接收任意参数都不会 panic，只返回文档列出的错误 | ✅ | `udp.FuzzReplyAndWriteTo` | 种子语料随 `go test` 运行；`make fuzz` 对每个目标做长时间 fuzz |
+| NF-09 | Fuzz | Flow 表的随机操作序列与模型一致，epoch 有效，OnClose 恰好一次 | ✅ | `flow.FuzzTableOps` | 种子语料随 `go test` 运行；`make fuzz` 对每个目标做长时间 fuzz |
+| NF-10 | Fuzz | Queue 的随机操作序列与模型一致：FIFO、容量、溢出策略、Stats | ✅ | `queue.FuzzRingOps` | 种子语料随 `go test` 运行；`make fuzz` 对每个目标做长时间 fuzz |
+| NF-11 | Fuzz | Buf 的随机 Get/Release 序列：预算与持有量一致，内存不共享 | ✅ | `buf.FuzzGetRelease` | 种子语料随 `go test` 运行；`make fuzz` 对每个目标做长时间 fuzz |
 | NF-12 | Bench | UDP 回显 | ✅ | `udp.BenchmarkEcho` | 约 10µs，0 次分配 |
-| NF-13 | Bench | TCP accept 吞吐 | ❌ |  |  |
-| NF-14 | Bench | 不同 flow 数量下的查找和清扫 | ⚠️ | `flow.BenchmarkGetAddrPort` | 只有单个 key 的查找，缺少不同 flow 数量和 Sweep 的基准 |
+| NF-13 | Bench | TCP accept 吞吐 | ✅ | `tcp.BenchmarkAccept` | 实测约 79µs/连接（建立、接受、关闭），23 次分配 |
+| NF-14 | Bench | 不同 flow 数量下的查找和清扫 | ✅ | `flow.BenchmarkGetAddrPort`<br>`flow.BenchmarkGetBySize`<br>`flow.BenchmarkSweepBySize` | `flow.BenchmarkGetBySize`、`flow.BenchmarkSweepBySize` |
 | NF-15 | Bench | Queue | ✅ | `queue.BenchmarkPushPop` |  |
 | NF-16 | Bench | Buf | ✅ | `buf.BenchmarkGetRelease` |  |
 | NF-19 | Bench | 共享计数器 | ✅ | `counter.BenchmarkCounterInc` |  |
 | NF-17 | 交叉编译 | linux/amd64、linux/386、darwin/arm64、windows/amd64、freebsd/amd64、js/wasm | ⚙️ |  | 对 linux/amd64、linux/386、darwin/arm64、windows/amd64、freebsd/amd64、js/wasm 执行 `GOOS=… GOARCH=… go vet ./...` |
-| NF-18 | 泄漏 | 生命周期结束后 goroutine 和 FD 被回收 | ❌ |  | 可以用 goleak，或在测试前后比较 `runtime.NumGoroutine` |
+| NF-18 | 泄漏 | 生命周期结束后 goroutine 和 FD 被回收 | ✅ | `leak.DetectsLeakedGoroutineAndFD` | `internal/leak`：检查 goroutine 和文件描述符（Linux），不引入外部依赖 |
 
 ## 14. 网络库通用问题清单
 
@@ -421,6 +422,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 - [ ] 转移失败时，所有权仍归原主人（QUEUE-03）。
 - [ ] 丢弃路径（队列溢出、关闭时剩余的元素、错误分支）都会释放资源，这是最容易泄漏的地方（QUEUE-04、QUEUE-12）。
 - [ ] 提供调试构建，能检测重复释放并统计未释放的数量（BUF-05、BUF-06）。
+- [ ] 关闭之后，goroutine 和文件描述符都要回到基线，要有测试检查，在压测之后也要检查（RUN-16、NF-18）。
 - [ ] 传给回调的数据是借用的，回调返回后就失效；要保留必须先复制。
 
 ### 14.4 并发与竞态
@@ -444,6 +446,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 - [ ] 同一种语义在不同平台上可能以不同方式出现，比如截断：Linux 设置 MSG_TRUNC 标志，Windows 返回错误（UDP-06）。
 - [ ] ICMP 错误在 Windows 上会以读错误的形式出现在未连接的 UDP socket 上，要归为暂时性错误。
 - [ ] socket 选项要在 bind 或 listen 之前设置，才能被 accept 出来的连接继承，TCP 窗口缩放也才能生效（SOCK-03、SOCK-04）。
+- [ ] 内核附在数据报上的统计（比如 SO_RXQ_OVFL）只会随下一个入队的包一起到达，流量停下来时读到的值会偏小；文档要写明，测试要补发一个探测包再对账（UDP-31）。
 - [ ] 每个声明支持的平台都要交叉编译通过；只在某个平台上运行的测试，用构建标签隔离（NF-17）。
 
 ### 14.7 性能
@@ -451,7 +454,8 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 - [ ] 热路径不创建 goroutine、不分配内存、不经过内部队列，并用 Benchmark 断言分配次数。
 - [ ] 按核数分配的内存可以预先分配，按连接数分配的内存要用池，绝不按包分配。
 - [ ] 共享计数器按 cache line 对齐，或者按读者分片，避免伪共享。
-- [ ] 全表扫描的成本随规模线性增长，要在文档中写明，并用 Benchmark 记录。
+- [ ] 全表扫描的成本随规模增长，而且超出 CPU 缓存后会更快地上升，要用 Benchmark 测出不同规模下的数字（FLOW-14）。
+- [ ] 文档中的性能数字必须来自实测，不能估算。go-netx 曾把 Sweep 的成本写成每百万约 20ms，实测约 105ms。
 
 ## 15. 测试执行分层
 
@@ -461,8 +465,8 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | Race | `make race`（包含 `-race` 和 `-race -tags netxdebug` 两轮） | 每个 PR |
 | Benchmark | `make bench` | 涉及性能的改动前后各跑一次，对比结果 |
 | 交叉编译 | 对 NF-17 列出的每个平台执行 `GOOS=… GOARCH=… go vet ./...` | 每个 PR 和每次发布 |
-| Fuzz | `go test -fuzz=<函数名> -fuzztime=30s ./<包>` | 定期执行；fuzz 要按包和函数名分别运行 |
-| Stress / 泄漏 | 尚未建立（NF-03～06、NF-18） | 合并前，或每晚定时执行 |
+| Fuzz | `make fuzz`（默认每个目标 30 秒，可用 `FUZZTIME=5m` 调整） | 改动解析、队列、flow、buf 的代码后，以及发布前 |
+| Stress / 泄漏 | `make stress`（`stress` 构建标签，普通构建和 `netxdebug` 各跑一轮；`NETX_STRESS_SECONDS` 控制长跑时长） | 合并前，以及发布前用较长时长再跑一次 |
 
 ## 16. 更新规则
 
