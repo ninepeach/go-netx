@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.1.0 (unreleased)
+
+### Added
+
+- `socket.Options.KeepAlive`: TCP keep-alive idle time, probe interval and
+  probe count, or `Disable`. Applies to listeners (inherited by accepted
+  connections) and dialers; the zero value keeps Go's default.
+- `tcp.Options.MaxConnsPerIP` and `IPv6PrefixBits`: per-client-address
+  connection cap, local to one server, with IPv6 grouped by prefix
+  (default /64). `tcp.Stats.RejectedPerIP` counts refusals.
+- `limit.PerKey[K]`: per-key concurrency limiter that forgets keys at zero.
+
+### Changed
+
+- tcp: admission slots are returned before a connection is counted as
+  `Closed`, so a `Closed` count never runs ahead of the slots it frees.
+
 ## v1.0.0
 
 First stable release. Rewrite around the frozen package layout in

@@ -163,3 +163,65 @@ func (b *Budget) Release(n int64) {
 }
 func (b *Budget) Used() int64 { return b.used.Load() }
 func (b *Budget) Max() int64  { return b.max }
+
+// PerKey admits at most Max holders for each key, for example per client
+// address. Keys are forgotten when their count drops to zero, so memory
+// follows the keys currently held, not every key ever seen.
+type PerKey[K comparable] struct {
+	max int
+	mu  sync.Mutex
+	n   map[K]int
+}
+
+// NewPerKey returns a limiter allowing max holders per key. max must be
+// positive.
+func NewPerKey[K comparable](max int) *PerKey[K] {
+	if max <= 0 {
+		panic("limit: NewPerKey max must be positive")
+	}
+	return &PerKey[K]{max: max, n: make(map[K]int)}
+}
+
+// TryAcquire takes a slot for k if it has one free.
+func (p *PerKey[K]) TryAcquire(k K) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.n[k] >= p.max {
+		return false
+	}
+	p.n[k]++
+	return true
+}
+
+// Release returns a slot for k. Releasing a key that holds no slot is a
+// caller bug and panics.
+func (p *PerKey[K]) Release(k K) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n, ok := p.n[k]
+	if !ok {
+		panic("limit: PerKey.Release without matching TryAcquire")
+	}
+	if n == 1 {
+		delete(p.n, k)
+		return
+	}
+	p.n[k] = n - 1
+}
+
+// InUse returns the slots held for k.
+func (p *PerKey[K]) InUse(k K) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.n[k]
+}
+
+// Keys returns how many keys currently hold at least one slot.
+func (p *PerKey[K]) Keys() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.n)
+}
+
+// Max returns the per-key limit.
+func (p *PerKey[K]) Max() int { return p.max }

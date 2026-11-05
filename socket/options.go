@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"syscall"
+	"time"
 )
 
 // UnsupportedPolicy controls what happens when an optional socket feature is
@@ -34,6 +35,39 @@ type Options struct {
 	// them before listen lets TCP window scaling take them into account.
 	RecvBuffer int
 	SendBuffer int
+	// KeepAlive configures TCP keep-alive probes. On a listener it applies
+	// to every accepted connection; on a Dialer to every dialed one. The
+	// zero value keeps Go's default (enabled, 15s).
+	KeepAlive KeepAlive
+}
+
+// KeepAlive configures TCP keep-alive probes, which let a server notice a
+// peer that vanished without closing the connection (for example a phone
+// that switched networks).
+type KeepAlive struct {
+	// Disable turns keep-alive probes off. The other fields are ignored.
+	Disable bool
+	// Idle is how long a connection must be idle before the first probe.
+	Idle time.Duration
+	// Interval is the time between probes.
+	Interval time.Duration
+	// Count is how many unanswered probes close the connection.
+	Count int
+}
+
+// IsZero reports whether k leaves Go's default behaviour in place.
+func (k KeepAlive) IsZero() bool { return k == KeepAlive{} }
+
+// apply returns the net package's keep-alive duration and configuration.
+// Zero fields in an enabled configuration fall back to Go's defaults.
+func (k KeepAlive) apply() (time.Duration, net.KeepAliveConfig) {
+	switch {
+	case k.Disable:
+		return -1, net.KeepAliveConfig{}
+	case k.IsZero():
+		return 0, net.KeepAliveConfig{}
+	}
+	return 0, net.KeepAliveConfig{Enable: true, Idle: k.Idle, Interval: k.Interval, Count: k.Count}
 }
 
 // BufferSetter is implemented by *net.UDPConn and *net.TCPConn.
@@ -77,13 +111,17 @@ func IsUnsupported(err error) bool {
 // ListenConfig returns a net.ListenConfig configured with the requested
 // pre-bind socket options.
 func ListenConfig(opts Options) net.ListenConfig {
-	return net.ListenConfig{Control: control(opts, false)}
+	keepAlive, keepAliveConfig := opts.KeepAlive.apply()
+	return net.ListenConfig{Control: control(opts, false), KeepAlive: keepAlive, KeepAliveConfig: keepAliveConfig}
 }
 
 // Dialer applies outbound socket options to base. The returned value is a copy;
 // the supplied dialer is not mutated.
 func Dialer(base net.Dialer, opts Options) net.Dialer {
 	base.Control = control(opts, true)
+	if !opts.KeepAlive.IsZero() {
+		base.KeepAlive, base.KeepAliveConfig = opts.KeepAlive.apply()
+	}
 	return base
 }
 

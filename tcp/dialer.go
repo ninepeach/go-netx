@@ -26,7 +26,9 @@ type Dialer struct {
 }
 
 type DialOptions struct {
-	Timeout   time.Duration
+	Timeout time.Duration
+	// KeepAlive is the keep-alive period, as in net.Dialer. Socket.KeepAlive,
+	// when set, takes precedence and allows idle, interval and count.
 	KeepAlive time.Duration
 	Socket    socket.Options
 	OnDial    func(DialEvent)

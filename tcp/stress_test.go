@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,15 +18,17 @@ import (
 )
 
 // Thousands of connections open and close concurrently through admission
-// control; afterwards every goroutine and file descriptor is returned.
+// control and the per-IP cap. On Linux, 80 workers dial from 127.0.0.1 (it
+// hits its per-IP cap) and 20 from 127.0.0.2 (together they exceed Admit);
+// afterwards every slot, goroutine and file descriptor is returned.
 //
 // Checks: NF-03, TCP-22
 func TestStressTCPChurn(t *testing.T) {
 	base := leak.Take()
-	admit := limit.NewConcurrency(64)
+	admit := limit.NewConcurrency(40) // below 2×MaxConnsPerIP
 	s, err := tcp.Listen(context.Background(), "tcp", "127.0.0.1:0", func(_ context.Context, c *tcp.Conn) {
 		_, _ = io.Copy(c, c)
-	}, tcp.Options{Admit: admit})
+	}, tcp.Options{Admit: admit, MaxConnsPerIP: 30})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,13 +38,18 @@ func TestStressTCPChurn(t *testing.T) {
 	const workers, perWorker = 100, 30
 	var dials, echoed atomic.Int64
 	var wg sync.WaitGroup
+	twoIPs := runtime.GOOS == "linux" // the whole 127/8 is local only on Linux
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		go func() {
+		go func(w int) {
 			defer wg.Done()
+			var d net.Dialer
+			if twoIPs && w%5 == 0 { // 80 workers on .1 hit its cap; .2 adds load for Admit
+				d.LocalAddr = &net.TCPAddr{IP: net.ParseIP("127.0.0.2")}
+			}
 			buf := make([]byte, 4)
 			for i := 0; i < perWorker; i++ {
-				c, err := net.Dial("tcp", s.Addr().String())
+				c, err := d.Dial("tcp", s.Addr().String())
 				if err != nil {
 					t.Error(err)
 					return
@@ -55,13 +63,13 @@ func TestStressTCPChurn(t *testing.T) {
 				}
 				c.Close()
 			}
-		}()
+		}(w)
 	}
 	wg.Wait()
 
 	waitFor(t, func() bool {
 		st := s.Stats()
-		return st.Active == 0 && st.Accepted+st.Rejected == uint64(dials.Load())
+		return st.Active == 0 && st.Accepted+st.Rejected+st.RejectedPerIP == uint64(dials.Load())
 	})
 	st := s.Stats()
 	if uint64(echoed.Load()) != st.Accepted || st.Closed != st.Accepted {
@@ -70,7 +78,10 @@ func TestStressTCPChurn(t *testing.T) {
 	if admit.InUse() != 0 {
 		t.Fatalf("admission leaked %d permits", admit.InUse())
 	}
-	t.Logf("dials=%d accepted=%d rejected=%d", dials.Load(), st.Accepted, st.Rejected)
+	if st.RejectedPerIP == 0 || (twoIPs && st.Rejected == 0) {
+		t.Fatalf("limits did not engage under 100 concurrent dialers: %+v", st)
+	}
+	t.Logf("dials=%d accepted=%d rejected=%d rejectedPerIP=%d", dials.Load(), st.Accepted, st.Rejected, st.RejectedPerIP)
 
 	if err := s.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
