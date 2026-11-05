@@ -132,10 +132,15 @@ of its own: `gin.Run` builds an `http.Server`, so it shares net/http's.
 
 Recorded as design decisions D-07 to D-09 in docs/TESTING.md.
 
-- **Worker pool (fasthttp).** It saves goroutine creation and stack growth,
-  well under a microsecond per connection. A full accept measures about 79µs
-  (`BenchmarkAccept`), dominated by syscalls, so the gain does not pay for
-  an idle-worker lifecycle. Revisit only with a benchmark that shows it.
+- **Worker pool (fasthttp).** It saves goroutine creation and stack growth:
+  measured about 3.5–4.2µs and 1 allocation for a new goroutine against
+  about 0.6µs and none for a pooled handoff (2 vCPU, a handler with some
+  stack depth), so about 3µs per connection. A full accept measures about
+  79µs (`BenchmarkAccept`), so the pool would save about 4%: roughly 3% of
+  a core at 10k new connections per second. For long-lived IM and game
+  connections that does not pay for an idle-worker lifecycle. Revisit when
+  a gateway serves short-lived connections at tens of thousands per second,
+  with a benchmark of that workload.
 - **Protocol replies on rejection** (fasthttp's 503). The transport does not
   speak the protocol; a gateway that wants to answer before closing does so
   in its own admission logic.
