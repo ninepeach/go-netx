@@ -8,24 +8,15 @@ import (
 	"time"
 )
 
-// UnsupportedPolicy controls what happens when an optional socket feature is
-// unavailable on the current platform.
-type UnsupportedPolicy uint8
-
-const (
-	UnsupportedError UnsupportedPolicy = iota
-	UnsupportedIgnore
-)
-
 // FastOpenOptions controls TCP Fast Open for listeners and outbound sockets.
+// If the platform or kernel does not support it, socket creation fails.
 type FastOpenOptions struct {
-	Enabled     bool
-	Backlog     int
-	Unsupported UnsupportedPolicy
+	Enabled bool
+	Backlog int
 }
 
 // Options contains portable socket configuration. Platform-specific features
-// follow the policy configured by the caller.
+// return explicit errors when a requested feature is unavailable.
 type Options struct {
 	FastOpen  FastOpenOptions
 	ReusePort bool
@@ -129,17 +120,16 @@ func control(opts Options, outbound bool) func(string, string, syscall.RawConn) 
 	return func(network, _ string, raw syscall.RawConn) error {
 		isTCP := network == "tcp" || network == "tcp4" || network == "tcp6"
 		isUDP := network == "udp" || network == "udp4" || network == "udp6"
-		if !isTCP && !isUDP {
-			return nil
+		if opts.FastOpen.Enabled && !isTCP {
+			return fmt.Errorf("socket: TCP Fast Open requires TCP, got network %q", network)
 		}
-		options := opts
-		if !isTCP {
-			options.FastOpen = FastOpenOptions{}
+		if opts.ReusePort && !isTCP && !isUDP {
+			return fmt.Errorf("socket: SO_REUSEPORT requires an IP socket, got network %q", network)
 		}
 		var applyErr error
 		if err := raw.Control(func(fd uintptr) {
-			if applyErr = applyBuffers(fd, options); applyErr == nil {
-				applyErr = applyOptions(fd, options, outbound)
+			if applyErr = applyBuffers(fd, opts); applyErr == nil && (isTCP || isUDP) {
+				applyErr = applyOptions(fd, opts, outbound)
 			}
 		}); err != nil {
 			return err
