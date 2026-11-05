@@ -283,7 +283,6 @@ func TestConcurrentShutdown(t *testing.T) {
 	}
 }
 
-
 // Readers and MaxPacket reject negative values and normalize zero values.
 func TestListenOptionBoundaries(t *testing.T) {
 	for _, tc := range []struct {

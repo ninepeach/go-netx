@@ -156,7 +156,8 @@ func TestUnsupportedOptionsAreExplicitOnDarwin(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := socket.ListenConfig(tc.opts).Listen(context.Background(), "tcp", "127.0.0.1:0")
+			lc := socket.ListenConfig(tc.opts)
+			_, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 			if err == nil || !socket.IsUnsupported(err) {
 				t.Fatalf("expected explicit unsupported-option error, got %v", err)
 			}

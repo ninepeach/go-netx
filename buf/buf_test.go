@@ -72,7 +72,6 @@ func BenchmarkGetRelease(b *testing.B) {
 	})
 }
 
-
 func TestReleaseClearsViewAndRefundsUnpooledCapacity(t *testing.T) {
 	const size = Large + 1
 	budget := limit.NewBudget(size)

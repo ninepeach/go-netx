@@ -140,7 +140,6 @@ func TestManualSweepKeepsTouchedFlow(t *testing.T) {
 	}
 }
 
-
 // GetOrOpen must construct a key's flow exactly once under concurrent access.
 func TestGetOrOpenConcurrentSingleCreation(t *testing.T) {
 	var created atomic.Int32

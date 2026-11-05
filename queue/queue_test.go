@@ -145,7 +145,6 @@ func BenchmarkPushPop(b *testing.B) {
 	}
 }
 
-
 func TestCloseWakesBlockedProducer(t *testing.T) {
 	r := New(Options[int]{Cap: 1})
 	if !r.Push(1) {

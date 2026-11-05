@@ -193,7 +193,6 @@ func (slowDrain) Shutdown(ctx context.Context) error {
 	return ctx.Err()
 }
 
-
 func TestOnStopErrorIsReturned(t *testing.T) {
 	stopErr := errors.New("stop hook failed")
 	s := netx.NewServer(netx.ServiceFuncs{
