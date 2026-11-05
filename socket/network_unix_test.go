@@ -16,7 +16,7 @@ func TestOptionsOnOtherNetworksAreRefused(t *testing.T) {
 		{RecvBuffer: 4096},
 		{ReusePort: true},
 		{KeepAlive: socket.KeepAlive{Disable: true}},
-		{FastOpen: socket.FastOpenOptions{Enabled: true, Unsupported: socket.UnsupportedIgnore}},
+		{FastOpen: socket.FastOpenOptions{Enabled: true}},
 	} {
 		lc := socket.ListenConfig(o)
 		ln, err := lc.Listen(context.Background(), "unix", filepath.Join(t.TempDir(), "s.sock"))
