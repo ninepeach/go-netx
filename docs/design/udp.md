@@ -49,7 +49,9 @@ Concurrency comes from `Readers`, not from goroutines per packet.
 reader to the same resolved port (`:0` works); the kernel hashes each
 4-tuple to one socket, so a flow always reaches the same reader and a
 gateway can shard per-flow state by `Packet.Reader` without locks. Without
-it, readers share one socket.
+it, readers share one socket. On macOS `ReusePort` binds but does not spread
+datagrams: one reader receives everything (D-15), so use it there only to
+run the production configuration, not for throughput.
 
 **The kernel buffer is the queue.** A slow handler stops its reader; the
 socket's receive queue (`socket.Options.RecvBuffer`) fills and the kernel

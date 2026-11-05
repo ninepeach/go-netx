@@ -25,6 +25,13 @@
 
 - tcp: admission slots are returned before a connection is counted as
   `Closed`, so a `Closed` count never runs ahead of the slots it frees.
+- socket: options that do not fit the network are refused with
+  `UnsupportedOptionError` instead of being silently ignored: any option on
+  a network other than TCP/UDP, and FastOpen or KeepAlive on UDP.
+  **Behaviour change:** a single `Options` with TCP-only settings can no
+  longer be passed to UDP listeners.
+- socket: `ReusePort` is supported on macOS (binds, does not balance load)
+  and on FreeBSD via `SO_REUSEPORT_LB` (balanced).
 
 ## v1.0.0
 

@@ -71,6 +71,7 @@ type Handler func(c *Conn, p *Packet)
 type Options struct {
 	// Readers is the number of reader goroutines, each holding a MaxPacket
 	// receive buffer; with ReusePort, also the number of sockets. Default 1.
+	// On macOS ReusePort does not spread datagrams, so one reader gets them all.
 	// go-netx does not cap it: sizing it to the host is the caller's job,
 	// typically no more than the number of CPUs.
 	Readers int
