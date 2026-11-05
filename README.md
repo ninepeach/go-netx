@@ -87,5 +87,8 @@ make examples
 make check   # test, race (with and without -tags netxdebug), vet
 ```
 
-The per-module test matrix, regression list and a general checklist for
-network libraries live in [docs/TESTING.md](docs/TESTING.md).
+Before pushing, run `make verify` (gofmt, vet, doc check, race with and
+without `netxdebug`, cross-compile). Contribution and testing rules are in
+[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md); the per-module test matrix,
+regression list and a general checklist for network libraries are in
+[docs/TESTING.md](docs/TESTING.md).
