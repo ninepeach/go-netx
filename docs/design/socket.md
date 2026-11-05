@@ -87,6 +87,8 @@ across sockets.
 - macOS ReusePort is accepted for configuration parity, but callers must
   not assume load balancing; use Linux or FreeBSD when per-socket load
   distribution is required.
+- D-13: no ignore policy; `UnsupportedPolicy` and `UnsupportedIgnore` were
+  removed, so an unsupported option always fails.
 - D-16: a buffer smaller than requested is an error, after one FORCE retry
   on Linux.
 

@@ -429,8 +429,8 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-10 | `MaxConnsPerIP` 只做单机限制，不做分布式 | 准入检查跑在 accept 循环里，必须本地、不阻塞；负载均衡按源 IP 哈希时，单机限制就等于全局限制。按用户、按会话的全局限制属于 Gateway 业务层；部署在 L4 负载均衡后面时，要确保拿到真实客户端 IP |
 | D-11 | 保持“每连接一个 goroutine”的模型，不自建 epoll（不像 netpoll） | 实测每个空闲连接约 3KB（栈约 2KB + 堆约 1KB），10 万连接约 300MB，可以接受；换来 TLS、跨平台、`net.Conn` 生态和零依赖。单机连接数达到 50 万到 100 万量级时，在该 Gateway 中直接使用 netpoll 或 gnet，而不是在 go-netx 里重新实现 |
 | D-12 | `stream` 作为独立的包，与 tcp、udp 同级 | `buf` 只负责内存，`tcp` 是不涉及缓冲的传输层，读写缓冲放在哪一个里都会破坏它原有的职责；只对字节流有意义，UDP 用不上 |
-| D-13 | 保留 `UnsupportedIgnore` | 它只作用于 FastOpen 这个“有则用、无则不影响正确性”的性能选项，让同一份配置能在 Linux 生产环境和 macOS 开发机上通用；只忽略内核明确表示不支持的错误（REG-01 已修复），其他错误照常返回。删除它会迫使调用方按平台写分支 |
-| D-14 | 选项不适用于当前网络类型时一律报错 | 在 unix 等网络上设置选项、在 UDP 上设置 FastOpen 或 KeepAlive，都属于配置错误，不再静默忽略，也不受 `UnsupportedIgnore` 影响。代价：TCP 和 UDP 不能再共用一份带 TCP 专属选项的 `socket.Options` |
+| D-13 | 删除 `UnsupportedPolicy` 和 `UnsupportedIgnore`（原决定为保留，已改为删除） | 不支持的选项一律显式报错，没有任何静默降级的开关，与 D-14、D-16 的“不静默忽略”原则一致。调用方要在不支持 FastOpen 的平台或内核上自行去掉该选项（迁移说明见 CHANGELOG v1.1.0）。代价：同一份带 FastOpen 的配置不能直接在 macOS 开发机上运行 |
+| D-14 | 选项不适用于当前网络类型时一律报错 | 在 unix 等网络上设置选项、在 UDP 上设置 FastOpen 或 KeepAlive，都属于配置错误，不再静默忽略。代价：TCP 和 UDP 不能再共用一份带 TCP 专属选项的 `socket.Options` |
 | D-15 | macOS 支持 ReusePort，FreeBSD 使用 `SO_REUSEPORT_LB` | macOS 允许多个 socket 绑定同一端口，但不分流，只有一个能收到数据；支持它是为了让同一份配置能在 Mac 开发机上运行，文档中写明不分流。FreeBSD 的 `SO_REUSEPORT_LB` 与 Linux 一样分流 |
 | D-16 | 缓冲区小于请求值时报错，不只报告 | 内核截断缓冲区时不报错（Linux 截到 rmem_max），网关会带着比设计小的缓冲区运行，直到高峰期丢包才发现。启动时报错，并提示调大 sysctl 或授予 CAP_NET_ADMIN，与“不静默忽略”的原则一致。代价：默认配置的机器上，请求大缓冲区会启动失败 |
 | D-17 | Linux 上默认用 recvmmsg 批量读取（`Batch` 默认 8） | 实测有积压时每个数据报的接收开销降低约 44%，且不增加延迟（不等凑满）。代价是每个 reader 的内存变为 Batch × MaxPacket，默认约 520KB；小包网关应设置 MaxPacket。32 比 8 提升很小但内存翻 4 倍，所以默认取 8 |
