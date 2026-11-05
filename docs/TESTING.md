@@ -419,6 +419,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | ID | P | 检查点 | 状态 | 测试 | 说明 |
 |---|---|---|---|---|---|
 | DOC-01 | P0 | 本文档与测试代码一一对应（规则见 0.1 节） | ✅ | `main.DocMatchesTests` |  |
+| DOC-02 | P1 | 每个包在 `docs/design/` 下都有设计文档：根包对应 runtime.md，internal 下的子包在 internal.md 中各有一节，其余包对应 `<包名>.md` | ✅ | `main.DocMatchesTests` |  |
 
 ## 13. 非功能测试
 

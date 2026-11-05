@@ -43,6 +43,26 @@ one UDP source address, ending when the transport ends. A session is business
 identity: a logged-in user that survives reconnects. Sessions belong to each
 gateway.
 
+## Module designs
+
+This document is the overall design. Each package has its own design
+document in [docs/design](docs/design): scope, API, internal design,
+concurrency, ownership, performance, decisions and the checkpoints that test
+it. `go test ./...` fails if a package lacks one (DOC-02).
+
+| Package | Design |
+|---|---|
+| `netx` (root) | [docs/design/runtime.md](docs/design/runtime.md) |
+| `socket` | [docs/design/socket.md](docs/design/socket.md) |
+| `tcp` | [docs/design/tcp.md](docs/design/tcp.md) |
+| `udp` | [docs/design/udp.md](docs/design/udp.md) |
+| `stream` | [docs/design/stream.md](docs/design/stream.md) |
+| `flow` | [docs/design/flow.md](docs/design/flow.md) |
+| `limit` | [docs/design/limit.md](docs/design/limit.md) |
+| `queue` | [docs/design/queue.md](docs/design/queue.md) |
+| `buf` | [docs/design/buf.md](docs/design/buf.md) |
+| `internal/*` | [docs/design/internal.md](docs/design/internal.md) |
+
 ## Dependency direction
 
 ```

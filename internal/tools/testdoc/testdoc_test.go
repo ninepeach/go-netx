@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Checks: DOC-01
+// Checks: DOC-01, DOC-02
 func TestDocMatchesTests(t *testing.T) {
 	problems, err := run("../../..", false)
 	if err != nil {
