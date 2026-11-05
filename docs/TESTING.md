@@ -78,10 +78,10 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-02 | P0 | RecvBuffer、SendBuffer 生效 | ✅ | `socket.ListenConfigAppliesBuffersBeforeBind` | RecvBuffer 和 SendBuffer 都检查了（unix） |
 | SOCK-03 | P0 | 缓冲区大小在 bind 之前设置（Control 阶段） | ✅ | `socket.ListenConfigAppliesBuffersBeforeBind` | 在 listener 上读取，证明是在 bind 前设置的 |
 | SOCK-04 | P1 | accept 出来的 TCP 连接继承 listener 的缓冲区设置 | ✅ | `tcp.AcceptedConnInheritsBuffersDarwin`<br>`tcp.AcceptedConnInheritsBuffers` | 分别在 Linux 和 macOS 上运行 |
-| SOCK-05 | P1 | 缓冲区与 ReusePort、FastOpen 组合使用时都生效 | ✅ | `socket.BuffersCombineWithReusePortAndFastOpen` | 仅 Linux |
-| SOCK-06 | P1 | 不支持的平台返回 `UnsupportedOptionError`，`IsUnsupported` 能识别 | ✅ | `socket.FastOpenPolicy`<br>`socket.UnsupportedOptionsAreExplicitOnDarwin` | FastOpenPolicy 在所有非 Linux 平台运行，另一个只在 macOS 运行 |
-| SOCK-07 | P1 | `UnsupportedIgnore` 只忽略“不支持”类错误，不吞掉其他系统错误 | ✅ | `socket.FastOpenIgnoreOnlyUnsupportedErrors` |  |
-| SOCK-08 | P1 | `UnsupportedError` 下错误能向上传递 | ✅ | `socket.FastOpenPolicy` |  |
+| SOCK-05 | P1 | 缓冲区与 ReusePort 组合使用时都生效 | ✅ | `socket.BuffersCombineWithReusePort` | 仅 Linux；FastOpen 单独按内核能力测试 |
+| SOCK-06 | P1 | 不支持的平台返回 `UnsupportedOptionError`，`IsUnsupported` 能识别 | ✅ | `socket.FastOpenUnsupportedPlatforms`<br>`socket.UnsupportedOptionsAreExplicitOnDarwin` | FastOpenUnsupportedPlatforms 在非 Linux 平台运行，另一个只在 macOS 运行 |
+| SOCK-07 | P1 | 删除“忽略不支持”策略：不支持的请求始终返回错误 | ➖ |  | v2.0.0 移除 `UnsupportedPolicy` 和 `UnsupportedIgnore` |
+| SOCK-08 | P1 | 不支持选项的错误能向上传递 | ✅ | `socket.FastOpenUnsupportedPlatforms`<br>`socket.FastOpenAlwaysReportsUnsupportedKernelErrors` |  |
 | SOCK-09 | P1 | `socket.Dialer` 返回副本，不修改调用方传入的 `net.Dialer` | ✅ | `socket.DialerCopiesBaseAndAppliesBuffers` |  |
 | SOCK-10 | P1 | 缓冲区为 0 或负数时不设置 | ✅ | `socket.ZeroAndNegativeBuffersAreNotApplied` | 仅 Linux |
 | SOCK-11 | P2 | `SetBuffers` 作用于已存在的连接 | ✅ | `socket.SetBuffersOnExistingConnection` |  |
@@ -90,6 +90,8 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-14 | P1 | `KeepAlive.Disable` 关闭 keepalive | ✅ | `socket.KeepAliveDisable` | 仅 Linux |
 | SOCK-15 | P1 | Dialer 拨出的连接同样应用 keepalive 设置 | ✅ | `socket.KeepAliveAppliesToDialer` | 仅 Linux |
 | SOCK-16 | P2 | 不设置 keepalive 时保持 Go 的默认行为（开启，15 秒） | ✅ | `socket.KeepAliveZeroValueKeepsGoDefault` | 仅 Linux |
+| SOCK-17 | P1 | 与 socket 网络类型不兼容的选项必须显式报错 | ✅ | `socket.RejectsIncompatibleNetworkOptions` | FastOpen 仅 TCP；ReusePort 仅 IP socket |
+| SOCK-18 | P1 | macOS 的 SO_REUSEPORT 能正常设置 | ✅ | `socket.ReusePortOnDarwin` | Darwin 专属测试 |
 
 ## 3. tcp：TCP 传输
 
@@ -394,6 +396,8 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | REG-16 | udp | 永久读错误会无限重试 | UDP-11 | ✅ |
 | REG-17 | tcp | 永久 accept 错误时，等待长连接 handler 导致无法退出 | TCP-06 | ✅ |
 | REG-18 | udp | `KernelDrops` 在 32 位回绕后停止增长 | UDP-28 | ✅ |
+| REG-19 | socket | TCP Fast Open 在 UDP 上被静默忽略，非 IP socket 上的 ReusePort 也被静默忽略 | SOCK-17 | ✅ |
+| REG-20 | socket | macOS 支持 SO_REUSEPORT，但实现将其错误地报告为不支持 | SOCK-18 | ✅ |
 
 ### 设计决定
 
@@ -491,7 +495,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 - [ ] 配置项都要确定 0、负数和上限各自的含义，并写进文档（UDP-13、UDP-14）。
 - [ ] 没有意义的配置值直接拒绝，比如超过协议上限的缓冲区大小。
 - [ ] 能力检测的结果要对外暴露，不能让“不支持”看起来像“零”（REG-06）。
-- [ ] “忽略不支持”的策略只能忽略不支持类的错误，不能把其他错误也一起吞掉（REG-01）。
+- [ ] 不支持的 socket 选项必须显式失败，不能静默降级；不要提供忽略策略。
 
 - [ ] fuzz 中执行速度降为“0 次每秒”，不一定是卡死：发现新输入后，引擎会花最长 60 秒去最小化它。先用 `-fuzzminimizetime` 缩短再判断。测试框架本身要保持线性复杂度，否则大输入会让它慢得像卡死。
 
