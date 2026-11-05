@@ -1,29 +1,5 @@
 # Changelog
 
-## v2.0.0 (unreleased)
-
-### Added
-
-- udp: `Options.Batch` receives up to that many queued datagrams per system
-  call with Linux `recvmmsg` (default 8 on Linux, 1 elsewhere, max 1024).
-  Under load the receive cost per datagram drops from about 2.2µs to
-  1.2µs (2 vCPU), with no added latency and 0 allocations; the handler
-  contract is unchanged. Memory per reader becomes `Batch × MaxPacket`
-  (about 520KB with the defaults); set `MaxPacket` for small datagrams.
-  `Batch` > 1 where `recvmmsg` is unavailable is an error.
-
-### Changed
-
-- `socket`: remove `UnsupportedPolicy` and `UnsupportedIgnore`.
-  Requested socket options now fail explicitly when unsupported; there is
-  no silent fallback mode.
-
-### Migration
-
-- Remove the `Unsupported` field from `FastOpenOptions`. Handle
-  `UnsupportedOptionError` and omit Fast Open when the target platform or
-  kernel does not support it.
-
 ## v1.1.0 (unreleased)
 
 ### Added
@@ -45,8 +21,19 @@
   assertions are not skipped; `make fuzz` caps input minimization
   (`FUZZMIN`).
 
+- udp: `Options.Batch` receives up to that many queued datagrams per system
+  call with Linux `recvmmsg` (default 8 on Linux, 1 elsewhere, max 1024).
+  Under load the receive cost per datagram drops from about 2.2µs to
+  1.2µs (2 vCPU), with no added latency and 0 allocations; the handler
+  contract is unchanged. Memory per reader becomes `Batch × MaxPacket`
+  (about 520KB with the defaults); set `MaxPacket` for small datagrams.
+  `Batch` > 1 where `recvmmsg` is unavailable is an error.
+
 ### Changed
 
+- socket: remove `UnsupportedPolicy` and `UnsupportedIgnore`.
+  Requested socket options now fail explicitly when unsupported; there is
+  no silent fallback mode. **Breaking:** see Migration.
 - tcp: admission slots are returned before a connection is counted as
   `Closed`, so a `Closed` count never runs ahead of the slots it frees.
 - socket: options that do not fit the network are refused with
@@ -63,6 +50,12 @@
   Listen instead of being silently reduced; raise the sysctl.
 - socket: `ReusePort` is supported on macOS (binds, does not balance load)
   and on FreeBSD via `SO_REUSEPORT_LB` (balanced).
+
+### Migration
+
+- Remove the `Unsupported` field from `FastOpenOptions`. Handle
+  `UnsupportedOptionError` and omit Fast Open when the target platform or
+  kernel does not support it.
 
 ## v1.0.0
 
