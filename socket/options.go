@@ -26,9 +26,13 @@ type Options struct {
 	// UnsupportedOptionError.
 	ReusePort bool
 	// RecvBuffer and SendBuffer set SO_RCVBUF and SO_SNDBUF in bytes when
-	// positive, before bind. The kernel may round or cap them. On a TCP
-	// listener they are inherited by every accepted connection, and setting
-	// them before listen lets TCP window scaling take them into account.
+	// positive, before bind. The size is read back: when the kernel grants
+	// less (Linux caps it at net.core.rmem_max and wmem_max without
+	// failing), Linux retries with SO_RCVBUFFORCE or SO_SNDBUFFORCE, which
+	// needs CAP_NET_ADMIN, and if the size is still short the socket is
+	// not created and a *BufferSizeError is returned. On a TCP listener
+	// they are inherited by every accepted connection, and setting them
+	// before listen lets TCP window scaling take them into account.
 	RecvBuffer int
 	SendBuffer int
 	// KeepAlive configures TCP keep-alive probes. On a listener it applies
@@ -73,8 +77,24 @@ type BufferSetter interface {
 }
 
 // SetBuffers applies RecvBuffer and SendBuffer to an existing connection,
-// for sockets not created through ListenConfig or Dialer.
+// for sockets not created through ListenConfig or Dialer. When c also
+// implements syscall.Conn (as *net.UDPConn and *net.TCPConn do), the sizes
+// are verified as in Options and a short size is a *BufferSizeError;
+// otherwise they are only set.
 func SetBuffers(c BufferSetter, opts Options) error {
+	if sc, ok := c.(syscall.Conn); ok && (opts.RecvBuffer > 0 || opts.SendBuffer > 0) {
+		raw, err := sc.SyscallConn()
+		if err != nil {
+			return err
+		}
+		var applyErr error
+		if err := raw.Control(func(fd uintptr) {
+			applyErr = applyBuffers(fd, Options{RecvBuffer: opts.RecvBuffer, SendBuffer: opts.SendBuffer})
+		}); err != nil {
+			return err
+		}
+		return applyErr
+	}
 	if opts.RecvBuffer > 0 {
 		if err := c.SetReadBuffer(opts.RecvBuffer); err != nil {
 			return err

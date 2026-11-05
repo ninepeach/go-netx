@@ -45,6 +45,8 @@ graceful shutdown; `ctx` is cancelled only when the drain times out.
 conn, err := udp.Listen(ctx, "udp", ":9001", func(c *udp.Conn, p *udp.Packet) {
 	_ = c.Reply(p, p.Data) // p.Data is borrowed: valid only in this call
 }, udp.Options{Readers: 4, Socket: socket.Options{ReusePort: true, RecvBuffer: 8 << 20}})
+// RecvBuffer is verified: on Linux it needs net.core.rmem_max >= 8 MiB
+// (or CAP_NET_ADMIN), otherwise Listen returns a *socket.BufferSizeError.
 if err != nil {
 	log.Fatal(err)
 }
