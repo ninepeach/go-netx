@@ -192,3 +192,61 @@ func (slowDrain) Shutdown(ctx context.Context) error {
 	<-ctx.Done()
 	return ctx.Err()
 }
+
+
+func TestOnStopErrorIsReturned(t *testing.T) {
+	stopErr := errors.New("stop hook failed")
+	s := netx.NewServer(netx.ServiceFuncs{
+		ServeFunc: func(ctx context.Context) error {
+			<-ctx.Done()
+			return nil
+		},
+	})
+	s.OnStop = func(context.Context) error { return stopErr }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.LoopContext(ctx) }()
+	for s.State() != netx.StateRunning {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, stopErr) {
+		t.Fatalf("LoopContext error=%v, want %v", err, stopErr)
+	}
+}
+
+func TestOnStopHasIndependentTimeoutBudget(t *testing.T) {
+	s := netx.NewServer(netx.ServiceFuncs{
+		ServeFunc: func(ctx context.Context) error {
+			<-ctx.Done()
+			return nil
+		},
+		ShutdownFunc: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
+	s.ShutdownTimeout = 20 * time.Millisecond
+	var onStopErr error
+	s.OnStop = func(ctx context.Context) error {
+		<-ctx.Done()
+		onStopErr = ctx.Err()
+		return onStopErr
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.LoopContext(ctx) }()
+	for s.State() != netx.StateRunning {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	err := <-done
+	if !errors.Is(onStopErr, context.DeadlineExceeded) {
+		t.Fatalf("OnStop context error=%v", onStopErr)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("LoopContext error=%v, want OnStop deadline error", err)
+	}
+}
