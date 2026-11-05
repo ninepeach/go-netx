@@ -101,6 +101,14 @@ The TCP transport was reviewed against the two most used Go HTTP servers
 (net/http as of Go 1.24.7, fasthttp `000816e`, 2026-11). Gin has no transport
 of its own: `gin.Run` builds an `http.Server`, so it shares net/http's.
 
+**The workloads differ, and that decides every item below.** fasthttp is
+built for web applications: many short-lived connections and a high request
+rate, so it optimises the cost of each new connection and request. go-netx
+serves IM, game and media gateways: relatively few long-lived connections
+that stay open, mostly idle, for minutes or hours. A fasthttp idea is
+adopted when it also holds, or matters more, for long-lived connections,
+and rejected when it only pays off for short ones.
+
 | | net/http | fasthttp | go-netx |
 |---|---|---|---|
 | Connection model | goroutine per conn | worker pool reusing goroutines (LIFO) | goroutine per conn |
@@ -115,6 +123,16 @@ of its own: `gin.Run` builds an `http.Server`, so it shares net/http's.
 | Error reporting | logs | logs, rate-limited | counters (`Stats`) |
 
 ### Adopted
+
+| fasthttp idea | Problem it solves there | For long-lived gateways | Decision |
+|---|---|---|---|
+| Worker pool | creating goroutines for many short connections | connections are rare events; ~3µs each is noise | rejected (D-07) |
+| 503 on overload | browsers need a status code | the protocol is the gateway's | rejected (D-08) |
+| `MaxConnsPerIP` | one source exhausting connections | same need on a public gateway | planned |
+| Keepalive settings | managing reused idle connections | must detect peers that vanished | planned |
+| `ReduceMemoryUsage` | idle keep-alive connections holding buffers | connections are idle most of the time: the gain is larger | planned (pattern) |
+
+From net/http and from go-netx's own requirements:
 
 - **net/http's backoff curve**, but interruptible: a shutdown never waits
   out a sleep (REG-02).
@@ -137,10 +155,12 @@ Recorded as design decisions D-07 to D-09 in docs/TESTING.md.
   about 0.6µs and none for a pooled handoff (2 vCPU, a handler with some
   stack depth), so about 3µs per connection. A full accept measures about
   79µs (`BenchmarkAccept`), so the pool would save about 4%: roughly 3% of
-  a core at 10k new connections per second. For long-lived IM and game
-  connections that does not pay for an idle-worker lifecycle. Revisit when
-  a gateway serves short-lived connections at tens of thousands per second,
-  with a benchmark of that workload.
+  a core at 10k new connections per second. This is an optimisation for
+  fasthttp's workload, many short connections; with long-lived IM and game
+  connections new connections are rare and it does not pay for an
+  idle-worker lifecycle. Revisit only if a gateway has to serve short-lived
+  connections at tens of thousands per second, with a benchmark of that
+  workload.
 - **Protocol replies on rejection** (fasthttp's 503). The transport does not
   speak the protocol; a gateway that wants to answer before closing does so
   in its own admission logic.
