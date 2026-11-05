@@ -293,6 +293,32 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | BUF-13 | P1 | Release 后 `B` 被置为 nil，避免继续使用旧的切片 | ✅ | `buf.ReleaseClearsViewAndRefundsUnpooledCapacity` |  |
 | BUF-14 | P1 | 预算不足时不会先扣掉一部分 | ✅ | `buf.BudgetRejectsLargeBufferWithoutPartialCharge` |  |
 
+## 8.5 stream：流式读写
+
+### 8.5.1 Reader
+
+| ID | P | 检查点 | 状态 | 测试 | 说明 |
+|---|---|---|---|---|---|
+| STREAM-01 | P0 | 数据分多次到达时，`Peek(n)` 能累积出完整的 n 字节（帧跨多次读取） | ✅ | `stream.PeekAccumulatesAcrossReads` |  |
+| STREAM-02 | P0 | `Discard` 消费数据；`Read` 符合 io.Reader 语义 | ✅ | `stream.DiscardAndRead` |  |
+| STREAM-03 | P1 | 空闲时只持有 IdleSize 的小缓冲区；需要时升级到更大档位；数据处理完且流量小时退回，大缓冲区还给池（预算归零） | ✅ | `stream.GrowsWhenNeededAndShrinksWhenQuiet`<br>`stream.StressBurstThenIdleReturnsBuffers` | 单元测试覆盖升级和退回；压测中 500 个连接经历大帧后全部退回，预算归零 |
+| STREAM-04 | P1 | 需要的数据超过 Max 时返回 `ErrTooLarge`，不会无限增长 | ✅ | `stream.MaxBoundsBuffering` |  |
+| STREAM-05 | P1 | 池的预算不足时返回 `ErrNoBuffer`，已缓冲的数据不丢失；预算恢复后继续工作 | ✅ | `stream.BudgetExhaustedKeepsData` |  |
+| STREAM-06 | P1 | 底层读错误（包括 EOF）正确传递，已缓冲的数据先交给调用方 | ✅ | `stream.SourceErrorsAfterData` |  |
+| STREAM-07 | P1 | `Release` 归还所有缓冲区，之后的调用返回错误；选项非法时构造函数 panic | ✅ | `stream.ReleaseAndOptions` |  |
+| STREAM-08 | P2 | 大量空闲连接下，每个连接的缓冲区开销（压测中实测，并与固定 4KB 缓冲区对比） | ✅ | `stream.StressIdleReaderMemory` | 实测（4000 个空闲连接）：每个连接比固定 4KB 的 bufio.Reader 少约 3.6KB，比不用缓冲区多约 430 字节 |
+
+### 8.5.2 Writer
+
+| ID | P | 检查点 | 状态 | 测试 | 说明 |
+|---|---|---|---|---|---|
+| STREAM-10 | P0 | `Flush` 按顺序写出所有 `Add` 的缓冲区，写完全部释放 | ✅ | `stream.FlushWritesInOrderAndReleases` |  |
+| STREAM-11 | P1 | `Flush` 失败时同样释放全部缓冲区并返回错误；`Discard` 不写出直接释放 | ✅ | `stream.FlushFailureAndDiscardRelease` |  |
+| STREAM-12 | P1 | 只有 1 个缓冲区时直接 Write；`Flush` 零分配 | ✅ | `stream.SingleBufferUsesWriteAndFlushIsAllocFree` | 零分配断言只在非 race 构建下生效（NF-21） |
+| STREAM-13 | P1 | 目标实现了 `WriteBuffers`（如 `*tcp.Conn`）时使用它；普通 io.Writer 退化为逐个写出，结果相同 | ✅ | `stream.BuffersWriterPreferredPlainWriterFallsBack` |  |
+| STREAM-14 | P1 | `tcp.Conn.WriteBuffers` 透传 writev 到底层连接，数据完整到达 | ✅ | `tcp.ConnWriteBuffers` |  |
+| STREAM-15 | P2 | 逐条 Write 与合并写出的对比（Benchmark） | ✅ | `stream.BenchmarkBacklog` | 经 `*tcp.Conn` 实测：积压 8 条快约 6 倍，32 条快约 9～10 倍，1 条与直接 Write 相同，均为零分配 |
+
 ## 9. internal 与可观测性
 
 | ID | P | 检查点 | 状态 | 测试 | 说明 |
@@ -385,6 +411,8 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-08 | 拒绝连接时不回复协议层消息（不像 fasthttp 回 503） | 传输层不理解协议；需要先回复再关闭的 Gateway 自行在准入逻辑中处理 |
 | D-09 | 不提供每连接独立的 context（不像 net/http 的 ConnContext） | 每个连接要多一次分配，而 Gateway 很少需要；共享的值来自 Serve 的 ctx，连接身份用 `Conn.ID()` |
 | D-10 | `MaxConnsPerIP` 只做单机限制，不做分布式 | 准入检查跑在 accept 循环里，必须本地、不阻塞；负载均衡按源 IP 哈希时，单机限制就等于全局限制。按用户、按会话的全局限制属于 Gateway 业务层；部署在 L4 负载均衡后面时，要确保拿到真实客户端 IP |
+| D-11 | 保持“每连接一个 goroutine”的模型，不自建 epoll（不像 netpoll） | 实测每个空闲连接约 3KB（栈约 2KB + 堆约 1KB），10 万连接约 300MB，可以接受；换来 TLS、跨平台、`net.Conn` 生态和零依赖。单机连接数达到 50 万到 100 万量级时，在该 Gateway 中直接使用 netpoll 或 gnet，而不是在 go-netx 里重新实现 |
+| D-12 | `stream` 作为独立的包，与 tcp、udp 同级 | `buf` 只负责内存，`tcp` 是不涉及缓冲的传输层，读写缓冲放在哪一个里都会破坏它原有的职责；只对字节流有意义，UDP 用不上 |
 
 ## 12.1 文档一致性
 
@@ -398,6 +426,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 |---|---|---|---|---|---|
 | NF-01 | Race | 所有包 | ⚙️ |  | `go test -race ./...` |
 | NF-02 | Race | Debug 构建 | ⚙️ |  | `go test -race -tags netxdebug ./...` |
+| NF-21 | Test | 不带 race 的一轮测试，分配次数断言只在这一轮生效 | ⚙️ |  | `make test`，已包含在 `make verify` 中 |
 | NF-03 | Stress | TCP 大量并发连接 | ✅ | `tcp.StressTCPChurn` | `make stress` |
 | NF-04 | Stress | UDP 高并发读写，并真正触发内核丢包 | ✅ | `udp.StressUDPEchoManySenders` | `make stress` |
 | NF-05 | Stress | Flow 并发创建与清理 | ✅ | `flow.ActiveFlowSurvivesSweep`<br>`flow.ConcurrentRemovalClosesFlowOnce`<br>`flow.GetOrOpenConcurrentSingleCreation`<br>`flow.StressTableChurn` | `make stress` |
@@ -413,6 +442,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | NF-15 | Bench | Queue | ✅ | `queue.BenchmarkPushPop` |  |
 | NF-16 | Bench | Buf | ✅ | `buf.BenchmarkGetRelease` |  |
 | NF-19 | Bench | 共享计数器 | ✅ | `counter.BenchmarkCounterInc` |  |
+| NF-20 | Fuzz | stream.Reader：随机的读取分块与 Peek/Discard 序列与模型一致 | ✅ | `stream.FuzzReader` | `make fuzz` |
 | NF-17 | 交叉编译 | linux/amd64、linux/386、darwin/arm64、windows/amd64、freebsd/amd64、js/wasm | ⚙️ |  | 对 linux/amd64、linux/386、darwin/arm64、windows/amd64、freebsd/amd64、js/wasm 执行 `GOOS=… GOARCH=… go vet ./...` |
 | NF-18 | 泄漏 | 生命周期结束后 goroutine 和 FD 被回收 | ✅ | `leak.DetectsLeakedGoroutineAndFD` | `internal/leak`：检查 goroutine 和文件描述符（Linux），不引入外部依赖 |
 
@@ -462,6 +492,8 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 - [ ] 能力检测的结果要对外暴露，不能让“不支持”看起来像“零”（REG-06）。
 - [ ] “忽略不支持”的策略只能忽略不支持类的错误，不能把其他错误也一起吞掉（REG-01）。
 
+- [ ] fuzz 中执行速度降为“0 次每秒”，不一定是卡死：发现新输入后，引擎会花最长 60 秒去最小化它。先用 `-fuzzminimizetime` 缩短再判断。测试框架本身要保持线性复杂度，否则大输入会让它慢得像卡死。
+
 ### 14.6 平台差异
 
 - [ ] 同一种语义在不同平台上可能以不同方式出现，比如截断：Linux 设置 MSG_TRUNC 标志，Windows 返回错误（UDP-06）。
@@ -472,6 +504,8 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 
 ### 14.7 性能
 
+- [ ] 包装了 `net.Conn` 的类型会让 `net.Buffers` 识别不出，writev 会静默退化成逐个写出；包装类型要显式提供 writev 透传（STREAM-13、STREAM-14）。不能用“拆开包装、直接写底层连接”的办法，对 TLS 连接会绕过加密。
+- [ ] 零分配之类的断言在 race 模式下会被跳过（sync.Pool 会故意丢弃对象），必须另外跑一轮不带 race 的测试（NF-21）。
 - [ ] 借鉴其他库的优化之前，先确认对方面向的负载和自己是否相同。例如 fasthttp 面向大量短连接，它的 worker 池对长连接网关几乎没有收益（D-07）。
 - [ ] 热路径不创建 goroutine、不分配内存、不经过内部队列，并用 Benchmark 断言分配次数。
 - [ ] 按核数分配的内存可以预先分配，按连接数分配的内存要用池，绝不按包分配。

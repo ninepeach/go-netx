@@ -42,6 +42,13 @@ func (c *Conn) ID() uint64 { return c.id }
 // Draining is closed when the server stops accepting and starts draining.
 func (c *Conn) Draining() <-chan struct{} { return c.srv.draining }
 
+// WriteBuffers writes all of v with one writev on the underlying TCP
+// connection where the platform supports it. It implements
+// stream.BuffersWriter: net.Buffers only uses writev on the standard
+// library's own connection types, so without it a *Conn would fall back to
+// one Write per buffer.
+func (c *Conn) WriteBuffers(v *net.Buffers) (int64, error) { return v.WriteTo(c.Conn) }
+
 // Handler serves one connection. ctx is cancelled only on Abort, not when
 // draining starts; watch c.Draining() for that. Panics are not recovered.
 type Handler func(ctx context.Context, c *Conn)

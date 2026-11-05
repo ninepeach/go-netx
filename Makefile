@@ -45,19 +45,23 @@ stress:
 	go test -race -tags 'stress netxdebug' -count=1 -run Stress ./...
 
 FUZZTIME ?= 30s
+# Minimizing a new input can take up to 60s by default and shows up as
+# 0 execs/sec; cap it so the fuzz time goes to fuzzing.
+FUZZMIN ?= 5s
 FUZZ_TARGETS := FuzzDropCount:./internal/sys FuzzTableOps:./flow FuzzRingOps:./queue \
-	FuzzGetRelease:./buf FuzzReplyAndWriteTo:./udp
+	FuzzGetRelease:./buf FuzzReplyAndWriteTo:./udp FuzzReader:./stream
 
 fuzz:
 	@for t in $(FUZZ_TARGETS); do \
 		echo "fuzz $${t%%:*} ($(FUZZTIME))"; \
-		go test -run '^$$' -fuzz "^$${t%%:*}$$" -fuzztime $(FUZZTIME) $${t#*:} || exit 1; \
+		go test -run '^$$' -fuzz "^$${t%%:*}$$" -fuzztime $(FUZZTIME) -fuzzminimizetime $(FUZZMIN) $${t#*:} || exit 1; \
 	done
 
 check: test race vet
 
 # verify is the required check before every push. See docs/CONTRIBUTING.md.
-verify: fmtcheck vet doccheck race cross
+# test runs without -race too: allocation assertions are skipped under race.
+verify: fmtcheck vet doccheck test race cross
 
 examples:
 	@mkdir -p $(EXAMPLE_DIR)

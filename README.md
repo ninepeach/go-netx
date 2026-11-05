@@ -14,6 +14,7 @@ flow    flow IDs, close state machine, idle-expiring table
 limit   admission limiters and budgets
 queue   bounded ring with overflow policy
 buf     pooled buffers with explicit ownership
+stream  idle-cheap stream reader and writev writer
 ```
 
 ## TCP
@@ -57,6 +58,24 @@ b := pool.Copy(p.Data)       // owned
 if !q.Push(b) {              // transfer failed: still ours
 	b.Release()
 }
+```
+
+## Stream I/O
+
+```go
+r := stream.NewReader(conn, pool, stream.ReaderOptions{Max: 64 << 10})
+defer r.Release()
+hdr, err := r.Peek(4)                    // waits on a 512B buffer while idle
+size := int(binary.BigEndian.Uint32(hdr))
+frame, err := r.Peek(4 + size)           // grows from the pool only now
+handle(frame[4:])
+r.Discard(4 + size)                      // shrinks back once quiet
+
+w := stream.NewWriter(conn)              // conn is a *tcp.Conn
+for _, m := range backlog {
+	w.Add(m)                             // takes ownership of each *buf.Buf
+}
+w.Flush()                                // one writev, then all released
 ```
 
 ## Several services

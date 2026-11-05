@@ -12,6 +12,7 @@
 |---|---|---|
 | 格式 | `make fmtcheck` | 所有文件都已经过 `gofmt` |
 | 静态检查 | `make vet` | `go vet ./...` |
+| 单元测试 | `make test` | 不带 `-race` 的 `go test ./...`。零分配之类的断言在 race 模式下会被跳过，只有这一轮会真正检查 |
 | 文档一致性 | `make doccheck` | TESTING.md 与测试代码一一对应（第 3 节） |
 | Race | `make race` | `go test -race`，普通构建和 `netxdebug` 构建各跑一轮 |
 | 交叉编译 | `make cross` | 对 linux/amd64、linux/386、darwin/arm64、windows/amd64、freebsd/amd64、js/wasm 执行 `go vet`，包括 `stress` 标签下的代码 |
