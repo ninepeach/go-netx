@@ -282,3 +282,33 @@ func TestConcurrentShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+
+// Readers and MaxPacket reject negative values and normalize zero values.
+func TestListenOptionBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts udp.Options
+	}{
+		{name: "negative readers", opts: udp.Options{Readers: -1}},
+		{name: "negative max packet", opts: udp.Options{MaxPacket: -1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if c, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, tc.opts); err == nil {
+				c.Close()
+				t.Fatal("negative option accepted")
+			}
+		})
+	}
+
+	c, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{Readers: 0, MaxPacket: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Stats(); got.KernelDropsEnabled != (runtime.GOOS == "linux") {
+		t.Fatalf("unexpected initial stats: %+v", got)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

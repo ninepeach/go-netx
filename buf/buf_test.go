@@ -71,3 +71,45 @@ func BenchmarkGetRelease(b *testing.B) {
 		}
 	})
 }
+
+
+func TestReleaseClearsViewAndRefundsUnpooledCapacity(t *testing.T) {
+	const size = Large + 1
+	budget := limit.NewBudget(size)
+	p := NewPool(budget)
+	b := p.Get(size)
+	if b == nil {
+		t.Fatal("expected unpooled buffer")
+	}
+	if budget.Used() != size {
+		t.Fatalf("used=%d want=%d", budget.Used(), size)
+	}
+	b.Release()
+	if b.B != nil {
+		t.Fatal("Release did not clear the public buffer view")
+	}
+	if budget.Used() != 0 {
+		t.Fatalf("budget not refunded: used=%d", budget.Used())
+	}
+}
+
+func TestBudgetRejectsLargeBufferWithoutPartialCharge(t *testing.T) {
+	budget := limit.NewBudget(Large)
+	p := NewPool(budget)
+	if b := p.Get(Large + 1); b != nil {
+		b.Release()
+		t.Fatal("buffer larger than remaining budget was allocated")
+	}
+	if budget.Used() != 0 {
+		t.Fatalf("failed Get charged budget: used=%d", budget.Used())
+	}
+}
+
+func TestGetNegativeSizePanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Get(-1) did not panic")
+		}
+	}()
+	NewPool(nil).Get(-1)
+}

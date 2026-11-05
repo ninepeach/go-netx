@@ -139,3 +139,89 @@ func TestManualSweepKeepsTouchedFlow(t *testing.T) {
 		t.Fatal("idle flow not evicted")
 	}
 }
+
+
+// GetOrOpen must construct a key's flow exactly once under concurrent access.
+func TestGetOrOpenConcurrentSingleCreation(t *testing.T) {
+	var created atomic.Int32
+	var closed atomic.Int32
+	tb := NewTable(TableOptions[int, int]{
+		OnClose: func(int, *Flow[int]) { closed.Add(1) },
+	})
+	const workers = 64
+	flows := make(chan *Flow[int], workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f, _ := tb.GetOrOpen(7, func() int {
+				created.Add(1)
+				return 42
+			})
+			flows <- f
+		}()
+	}
+	wg.Wait()
+	close(flows)
+	var first *Flow[int]
+	for f := range flows {
+		if first == nil {
+			first = f
+		} else if f != first {
+			t.Fatal("GetOrOpen returned different flows for the same key")
+		}
+	}
+	if created.Load() != 1 || tb.Len() != 1 {
+		t.Fatalf("created=%d len=%d", created.Load(), tb.Len())
+	}
+	tb.Close()
+	if closed.Load() != 1 || tb.Len() != 0 {
+		t.Fatalf("closed=%d len=%d", closed.Load(), tb.Len())
+	}
+}
+
+// A clock advanced by a future Sweep must not move backwards on a stale Sweep.
+func TestSweepClockNeverMovesBackward(t *testing.T) {
+	tb := NewTable(TableOptions[int, int]{IdleTimeout: 20 * time.Second})
+	tb.GetOrOpen(1, nil)
+	future := time.Now().Add(10 * time.Second)
+	if got := tb.Sweep(future); got != 0 {
+		t.Fatalf("first sweep evicted fresh flow: %d", got)
+	}
+	tb.Get(1) // touch at the advanced table clock
+	if got := tb.Sweep(future.Add(-5 * time.Second)); got != 0 {
+		t.Fatalf("stale sweep evicted flow: %d", got)
+	}
+	if got := tb.Sweep(future.Add(30 * time.Second)); got != 1 {
+		t.Fatalf("future idle sweep evicted %d flows, want 1", got)
+	}
+}
+
+// Remove, Sweep and Close racing for the same flow must invoke OnClose once.
+func TestConcurrentRemovalClosesFlowOnce(t *testing.T) {
+	var closed atomic.Int32
+	tb := NewTable(TableOptions[int, int]{
+		IdleTimeout: time.Nanosecond,
+		OnClose:     func(int, *Flow[int]) { closed.Add(1) },
+	})
+	f, _ := tb.GetOrOpen(1, nil)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		tb.Remove(1, f.ID())
+	}()
+	go func() {
+		defer wg.Done()
+		tb.Sweep(time.Now().Add(time.Second))
+	}()
+	go func() {
+		defer wg.Done()
+		tb.Close()
+	}()
+	wg.Wait()
+	if closed.Load() != 1 || tb.Len() != 0 {
+		t.Fatalf("OnClose calls=%d len=%d", closed.Load(), tb.Len())
+	}
+}
