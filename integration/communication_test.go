@@ -22,6 +22,7 @@ import (
 	"github.com/ninepeach/go-netx/udp"
 )
 
+// Checks: INT-01, TCP-03
 func TestTCPLineEcho(t *testing.T) {
 	ctx := context.Background()
 	ln, err := tcp.Listen(ctx, "tcp", "127.0.0.1:0", func(_ context.Context, c *tcp.Conn) {
@@ -85,6 +86,7 @@ type peer struct {
 // TestUDPGatewayComposition: the read loop never blocks. Each datagram is
 // copied into an owned buffer and handed to the sender flow's queue; a
 // per-flow goroutine writes it back. Flows expire through flow.Table.
+// Checks: BUF-06, INT-03, INT-04, INT-06
 func TestUDPGatewayComposition(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

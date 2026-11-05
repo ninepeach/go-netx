@@ -2,8 +2,10 @@
 
 ## v1.0.0
 
-Rewrite around the frozen package layout in ARCHITECTURE.md. Not compatible
-with v0.x.
+First stable release. Rewrite around the frozen package layout in
+ARCHITECTURE.md; not compatible with v0.x. Every P0 and P1 checkpoint in
+docs/TESTING.md is covered by a test, and the document is kept in sync with
+the tests mechanically (`make verify`).
 
 ### Added
 
@@ -17,7 +19,12 @@ with v0.x.
 - `buf`: `Pool` with three size classes, optional `Budget`, ownership rules,
   and `-tags netxdebug` double-release and leak checks.
 - `netx.Group` to run several services under one runtime.
-- `socket.Options.RecvBuffer` and `SendBuffer`.
+- `socket.Options.RecvBuffer` and `SendBuffer`, applied before bind; TCP
+  listeners pass them to accepted connections.
+- `udp.MaxDatagram` (65000): the size limit in both directions. `MaxPacket`
+  defaults to it and may not exceed it.
+- `udp.ErrNilPacket`, `udp.Stats.KernelDropsEnabled`.
+- `Stats.KernelDrops` survives the kernel's 32-bit counter wraparound.
 - `Stats()` snapshots on `tcp.Server`, `udp.Conn` and `queue.Ring`.
 
 ### Changed
@@ -30,7 +37,18 @@ with v0.x.
   through `Options.Admit`; three-phase shutdown where the handler context is
   cancelled only on abort; `Serve` returns after all handlers.
 - `netx.Server`: stop signals start the drain instead of cancelling the
-  service; abort waits at most `AbortGrace`.
+  service; abort waits at most `AbortGrace`; a second signal aborts at once;
+  `OnStop` gets its own `ShutdownTimeout` budget.
+- Retry backoff in the TCP accept loop and UDP readers stops immediately on
+  Close or Shutdown.
+- `limit`: `Budget` and `Concurrency` are overflow-safe and never exceed
+  their maximum, even transiently; releasing more than was acquired panics.
+- `socket`: `UnsupportedIgnore` ignores only "not supported" errors; other
+  setsockopt errors are returned.
+- `flow`: `Sweep` advances the table clock, so hand-driven sweeps do not
+  evict touched flows; touches happen under the shard lock.
+- `udp`: fatal read errors close the Conn and are returned by `Serve`;
+  `Reply` never panics on a nil or foreign packet.
 
 ### Removed
 

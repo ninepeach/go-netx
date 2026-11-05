@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ninepeach/go-netx/internal/backoff"
 	"github.com/ninepeach/go-netx/internal/counter"
 	"github.com/ninepeach/go-netx/limit"
 	"github.com/ninepeach/go-netx/socket"
@@ -46,7 +47,9 @@ type Handler func(ctx context.Context, c *Conn)
 type Options struct {
 	// Admit is consulted for every accepted connection; rejected
 	// connections are closed immediately and counted. Nil admits all.
-	Admit  limit.Limiter
+	Admit limit.Limiter
+	// Socket applies to the listener created by Listen; accepted
+	// connections inherit its buffer sizes. NewServer ignores it.
 	Socket socket.Options
 }
 
@@ -148,7 +151,7 @@ func (s *Server) Serve(ctx context.Context) error {
 }
 
 func (s *Server) acceptLoop() error {
-	var backoff time.Duration
+	var delay time.Duration
 	for {
 		nc, err := s.ln.Accept()
 		if err != nil {
@@ -158,14 +161,16 @@ func (s *Server) acceptLoop() error {
 			var temp interface{ Temporary() bool }
 			if errors.As(err, &temp) && temp.Temporary() {
 				s.acceptErrors.Inc()
-				backoff = min(max(backoff*2, 5*time.Millisecond), time.Second)
-				time.Sleep(backoff)
+				delay = backoff.Next(delay)
+				if !backoff.Wait(delay, s.draining) {
+					return nil // stopped while backing off
+				}
 				continue
 			}
 			s.stopAccept()
 			return fmt.Errorf("tcp: accept: %w", err)
 		}
-		backoff = 0
+		delay = 0
 		if s.opts.Admit != nil && !s.opts.Admit.TryAcquire() {
 			s.rejected.Inc()
 			_ = nc.Close()
@@ -189,9 +194,6 @@ func (s *Server) serveConn(c *Conn) {
 	defer s.release(c)
 	defer s.untrack(c)
 	defer c.Close()
-	if tc, ok := c.Conn.(*net.TCPConn); ok {
-		_ = socket.SetBuffers(tc, s.opts.Socket)
-	}
 	s.handler(s.ctx, c)
 }
 

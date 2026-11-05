@@ -1,10 +1,15 @@
-.PHONY: fmt test race vet bench check examples clean
+.PHONY: fmt fmtcheck test race vet bench testdoc doccheck cross check verify examples clean
+
+PLATFORMS := linux/amd64 linux/386 darwin/arm64 windows/amd64 freebsd/amd64 js/wasm
 
 EXAMPLE_DIR := build/examples
 EXAMPLES := tcp-echo tcp-client udp-echo udp-client http-server socks5-server
 
 fmt:
 	gofmt -w .
+
+fmtcheck:
+	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 test:
 	go test ./...
@@ -19,7 +24,22 @@ vet:
 bench:
 	go test -run '^$$' -bench . -benchmem ./...
 
+testdoc:
+	go run ./internal/tools/testdoc -w
+
+doccheck:
+	go run ./internal/tools/testdoc
+
+cross:
+	@for p in $(PLATFORMS); do \
+		echo "vet $$p"; \
+		GOOS=$${p%/*} GOARCH=$${p#*/} go vet ./... || exit 1; \
+	done
+
 check: test race vet
+
+# verify is the required check before every push. See docs/CONTRIBUTING.md.
+verify: fmtcheck vet doccheck race cross
 
 examples:
 	@mkdir -p $(EXAMPLE_DIR)

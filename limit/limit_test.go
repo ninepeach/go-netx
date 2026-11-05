@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// Checks: RES-01
 func TestConcurrency(t *testing.T) {
 	c := NewConcurrency(2)
 	if !c.TryAcquire() || !c.TryAcquire() {
@@ -22,6 +23,7 @@ func TestConcurrency(t *testing.T) {
 	}
 }
 
+// Checks: RES-02
 func TestConcurrencyParallel(t *testing.T) {
 	c := NewConcurrency(8)
 	var wg sync.WaitGroup
@@ -47,6 +49,7 @@ func TestConcurrencyParallel(t *testing.T) {
 	}
 }
 
+// Checks: RES-07
 func TestRate(t *testing.T) {
 	now := time.Unix(0, 0)
 	r := NewRate(10, 2)
@@ -60,6 +63,7 @@ func TestRate(t *testing.T) {
 	}
 }
 
+// Checks: RES-08
 func TestAllReleasesOnPartialFailure(t *testing.T) {
 	a, b := NewConcurrency(1), NewConcurrency(1)
 	b.TryAcquire()
@@ -71,6 +75,7 @@ func TestAllReleasesOnPartialFailure(t *testing.T) {
 	}
 }
 
+// Checks: RES-10
 func TestBudget(t *testing.T) {
 	b := NewBudget(100)
 	if !b.Reserve(60) || b.Reserve(50) || !b.Reserve(40) {
@@ -82,6 +87,7 @@ func TestBudget(t *testing.T) {
 	}
 }
 
+// Checks: RES-11, RES-12
 func TestBudgetRefusesNegative(t *testing.T) {
 	b := NewBudget(100)
 	if b.Reserve(-100) {
@@ -102,6 +108,7 @@ func TestBudgetRefusesNegative(t *testing.T) {
 	}
 }
 
+// Checks: RES-14
 func TestBudgetParallelNeverExceeds(t *testing.T) {
 	b := NewBudget(1000)
 	var wg sync.WaitGroup
@@ -126,6 +133,7 @@ func TestBudgetParallelNeverExceeds(t *testing.T) {
 	}
 }
 
+// Checks: RES-13
 func TestBudgetOverflow(t *testing.T) {
 	b := NewBudget(math.MaxInt64)
 	if !b.Reserve(1) {
@@ -142,6 +150,7 @@ func TestBudgetOverflow(t *testing.T) {
 	}
 }
 
+// Checks: RES-03
 func TestConcurrencyNeverExceedsMax(t *testing.T) {
 	c := NewConcurrency(4)
 	var wg sync.WaitGroup
@@ -166,4 +175,50 @@ func TestConcurrencyNeverExceedsMax(t *testing.T) {
 	if over.Load() {
 		t.Fatal("InUse exceeded Max")
 	}
+}
+
+// Checks: RES-04
+func TestConcurrencyOverReleasePanics(t *testing.T) {
+	c := NewConcurrency(1)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Release without TryAcquire did not panic")
+		}
+		if c.InUse() != 0 {
+			t.Fatalf("InUse=%d after rejected release", c.InUse())
+		}
+		if !c.TryAcquire() || c.TryAcquire() {
+			t.Fatal("limit raised by over-release")
+		}
+	}()
+	c.Release()
+}
+
+func mustPanic(t *testing.T, name string, f func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("%s did not panic", name)
+		}
+	}()
+	f()
+}
+
+// Checks: RES-05
+func TestNewConcurrencyRejectsNonPositive(t *testing.T) {
+	mustPanic(t, "NewConcurrency(0)", func() { NewConcurrency(0) })
+	mustPanic(t, "NewConcurrency(-1)", func() { NewConcurrency(-1) })
+}
+
+// Checks: RES-09
+func TestNewRateRejectsNonPositive(t *testing.T) {
+	mustPanic(t, "NewRate(0, 1)", func() { NewRate(0, 1) })
+	mustPanic(t, "NewRate(1, 0)", func() { NewRate(1, 0) })
+	mustPanic(t, "NewRate(-1, 1)", func() { NewRate(-1, 1) })
+}
+
+// Checks: RES-15
+func TestNewBudgetRejectsNonPositive(t *testing.T) {
+	mustPanic(t, "NewBudget(0)", func() { NewBudget(0) })
+	mustPanic(t, "NewBudget(-1)", func() { NewBudget(-1) })
 }

@@ -48,6 +48,7 @@ func (f *fake) Shutdown(context.Context) error {
 	return nil
 }
 
+// Checks: RUN-01
 func TestOrderAndShutdown(t *testing.T) {
 	f := newFake()
 	s := netx.NewServer(f)
@@ -73,6 +74,7 @@ func TestOrderAndShutdown(t *testing.T) {
 	}
 }
 
+// Checks: RUN-03
 func TestParentCancelDrainsNotAborts(t *testing.T) {
 	f := newFake()
 	s := netx.NewServer(f)
@@ -89,6 +91,7 @@ func TestParentCancelDrainsNotAborts(t *testing.T) {
 	}
 }
 
+// Checks: RUN-04
 func TestServeErrorStopsAndIsReturned(t *testing.T) {
 	f := newFake()
 	f.serveErr = errors.New("boom")
@@ -98,6 +101,7 @@ func TestServeErrorStopsAndIsReturned(t *testing.T) {
 	}
 }
 
+// Checks: RUN-05
 func TestStartErrorShutsDown(t *testing.T) {
 	f := newFake()
 	s := netx.NewServer(f)
@@ -107,6 +111,7 @@ func TestStartErrorShutsDown(t *testing.T) {
 	}
 }
 
+// Checks: RUN-02, RUN-06
 func TestOneShotAndPanic(t *testing.T) {
 	s := netx.NewServer(netx.ServiceFuncs{ServeFunc: func(context.Context) error { panic("x") }})
 	if err := s.LoopContext(context.Background()); err == nil || !strings.Contains(err.Error(), "panic") {
@@ -117,6 +122,7 @@ func TestOneShotAndPanic(t *testing.T) {
 	}
 }
 
+// Checks: RUN-07
 func TestStuckServiceBoundedByAbortGrace(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)
@@ -133,6 +139,7 @@ func TestStuckServiceBoundedByAbortGrace(t *testing.T) {
 	}
 }
 
+// Checks: INT-02, RUN-14
 func TestGroupWithRealTransports(t *testing.T) {
 	ctx := context.Background()
 	ts, err := tcp.Listen(ctx, "tcp", "127.0.0.1:0", func(_ context.Context, c *tcp.Conn) { _, _ = io.Copy(c, c) }, tcp.Options{})
@@ -168,5 +175,87 @@ func TestGroupWithRealTransports(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Checks: RUN-08
+func TestOnStopGetsFreshContext(t *testing.T) {
+	s := netx.NewServer(slowDrain{})
+	s.ShutdownTimeout = 20 * time.Millisecond
+	var stopErr error
+	s.OnStop = func(ctx context.Context) error { stopErr = ctx.Err(); return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.LoopContext(ctx)
+	if stopErr != nil {
+		t.Fatalf("OnStop got an expired context: %v", stopErr)
+	}
+}
+
+// slowDrain uses up the whole shutdown budget.
+type slowDrain struct{}
+
+func (slowDrain) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
+func (slowDrain) Shutdown(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// Checks: RUN-12
+func TestOnStopErrorIsReturned(t *testing.T) {
+	stopErr := errors.New("stop hook failed")
+	s := netx.NewServer(netx.ServiceFuncs{
+		ServeFunc: func(ctx context.Context) error {
+			<-ctx.Done()
+			return nil
+		},
+	})
+	s.OnStop = func(context.Context) error { return stopErr }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.LoopContext(ctx) }()
+	for s.State() != netx.StateRunning {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, stopErr) {
+		t.Fatalf("LoopContext error=%v, want %v", err, stopErr)
+	}
+}
+
+// Checks: RUN-08
+func TestOnStopHasIndependentTimeoutBudget(t *testing.T) {
+	s := netx.NewServer(netx.ServiceFuncs{
+		ServeFunc: func(ctx context.Context) error {
+			<-ctx.Done()
+			return nil
+		},
+		ShutdownFunc: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
+	s.ShutdownTimeout = 20 * time.Millisecond
+	var onStopErr error
+	s.OnStop = func(ctx context.Context) error {
+		<-ctx.Done()
+		onStopErr = ctx.Err()
+		return onStopErr
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.LoopContext(ctx) }()
+	for s.State() != netx.StateRunning {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	err := <-done
+	if !errors.Is(onStopErr, context.DeadlineExceeded) {
+		t.Fatalf("OnStop context error=%v", onStopErr)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("LoopContext error=%v, want OnStop deadline error", err)
 	}
 }

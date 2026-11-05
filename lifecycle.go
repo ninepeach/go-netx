@@ -119,12 +119,15 @@ type Server struct {
 
 	// OnStart runs before Serve; an error stops the server.
 	OnStart func(context.Context) error
-	// OnStop runs after the service has stopped.
+	// OnStop runs after the service has stopped, with its own
+	// ShutdownTimeout budget, so a drain that used up its time does not
+	// leave OnStop with an expired context.
 	OnStop func(context.Context) error
 	// OnError receives the final error, if any.
 	OnError func(error)
 
 	// Signals that start shutdown in Loop. Default SIGINT and SIGTERM.
+	// The first starts a graceful drain; a second one aborts at once.
 	Signals []os.Signal
 	// ShutdownTimeout bounds the drain phase. Zero means no bound.
 	ShutdownTimeout time.Duration
@@ -132,6 +135,8 @@ type Server struct {
 	mu     sync.Mutex
 	state  State
 	stop   context.CancelFunc
+	force  chan struct{} // closed to cut the drain short
+	forced bool
 	done   chan struct{}
 	result error
 }
@@ -148,14 +153,42 @@ func (s *Server) State() State {
 }
 
 // Loop runs until a signal in Signals arrives, then shuts down gracefully.
+// A second signal during the drain aborts immediately.
 func (s *Server) Loop() error {
 	signals := s.Signals
 	if len(signals) == 0 {
 		signals = []os.Signal{syscall.SIGINT, syscall.SIGTERM}
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), signals...)
-	defer stop()
+	ch := make(chan os.Signal, 2)
+	signal.Notify(ch, signals...)
+	defer signal.Stop(ch)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	exited := make(chan struct{})
+	defer close(exited)
+	go func() {
+		select {
+		case <-ch:
+			cancel() // first signal: drain
+		case <-exited:
+			return
+		}
+		select {
+		case <-ch:
+			s.forceAbort() // second signal: abort
+		case <-exited:
+		}
+	}()
 	return s.LoopContext(ctx)
+}
+
+func (s *Server) forceAbort() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.force != nil && !s.forced {
+		s.forced = true
+		close(s.force)
+	}
 }
 
 // LoopContext runs until ctx is done, Stop or Shutdown is called, or the
@@ -180,7 +213,8 @@ func (s *Server) LoopContext(parent context.Context) (result error) {
 		if err := protect("start", func() error { return s.OnStart(runCtx) }); err != nil {
 			ctx, cancel := s.shutdownContext()
 			defer cancel()
-			return errors.Join(err, s.Service.Shutdown(ctx), s.onStop(ctx))
+			shutdownErr := protect("shutdown", func() error { return s.Service.Shutdown(ctx) })
+			return errors.Join(err, shutdownErr, s.onStop())
 		}
 	}
 	s.setState(StateRunning)
@@ -199,6 +233,13 @@ func (s *Server) LoopContext(parent context.Context) (result error) {
 	s.setState(StateStopping)
 	ctx, cancel := s.shutdownContext()
 	defer cancel()
+	go func() {
+		select {
+		case <-s.force:
+			cancel() // second signal: end the drain now
+		case <-ctx.Done():
+		}
+	}()
 	shutdownErr := protect("shutdown", func() error { return s.Service.Shutdown(ctx) })
 	if !returned {
 		abort()
@@ -208,17 +249,19 @@ func (s *Server) LoopContext(parent context.Context) (result error) {
 			serveErr = ErrAbortTimeout
 		}
 	}
-	result = errors.Join(serveErr, ignoreCanceled(shutdownErr), s.onStop(ctx))
+	result = errors.Join(serveErr, ignoreCanceled(shutdownErr), s.onStop())
 	if result != nil && s.OnError != nil {
 		s.OnError(result)
 	}
 	return result
 }
 
-func (s *Server) onStop(ctx context.Context) error {
+func (s *Server) onStop() error {
 	if s.OnStop == nil {
 		return nil
 	}
+	ctx, cancel := s.shutdownContext()
+	defer cancel()
 	return protect("stop", func() error { return s.OnStop(ctx) })
 }
 
@@ -230,6 +273,9 @@ func (s *Server) begin(parent context.Context) (context.Context, error) {
 	}
 	if s.done == nil {
 		s.done = make(chan struct{})
+	}
+	if s.force == nil {
+		s.force = make(chan struct{})
 	}
 	ctx, stop := context.WithCancel(parent)
 	s.stop = stop
