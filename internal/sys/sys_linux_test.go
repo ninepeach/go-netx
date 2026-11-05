@@ -18,6 +18,7 @@ func cmsg(level, typ int32, data []byte) []byte {
 	return b
 }
 
+// Checks: SYS-03, UDP-30
 func TestDropCountParse(t *testing.T) {
 	other := cmsg(syscall.SOL_SOCKET, syscall.SCM_TIMESTAMP, make([]byte, 16))
 	drops := cmsg(syscall.SOL_SOCKET, soRxqOvfl, []byte{7, 0, 0, 0})

@@ -58,6 +58,7 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 }
 
+// Checks: OBS-01, TCP-01, TCP-13
 func TestEchoAndStats(t *testing.T) {
 	s, _ := start(t, echo, tcp.Options{})
 	c := dial(t, s)
@@ -69,6 +70,7 @@ func TestEchoAndStats(t *testing.T) {
 	}
 }
 
+// Checks: TCP-12
 func TestConnIDsUnique(t *testing.T) {
 	ids := make(chan uint64, 2)
 	s, _ := start(t, func(_ context.Context, c *tcp.Conn) { ids <- c.ID() }, tcp.Options{})
@@ -80,6 +82,7 @@ func TestConnIDsUnique(t *testing.T) {
 	}
 }
 
+// Checks: OBS-01, TCP-14, TCP-15
 func TestAdmitRejects(t *testing.T) {
 	s, _ := start(t, echo, tcp.Options{Admit: limit.NewConcurrency(1)})
 	roundTrip(t, dial(t, s), "a")
@@ -92,6 +95,7 @@ func TestAdmitRejects(t *testing.T) {
 	}
 }
 
+// Checks: TCP-16, TCP-18
 func TestShutdownDrainsThenReturns(t *testing.T) {
 	gotDraining := make(chan struct{})
 	s, done := start(t, func(ctx context.Context, c *tcp.Conn) {
@@ -115,6 +119,7 @@ func TestShutdownDrainsThenReturns(t *testing.T) {
 	}
 }
 
+// Checks: TCP-17
 func TestShutdownAbortsOnTimeout(t *testing.T) {
 	aborted := make(chan struct{})
 	s, done := start(t, func(ctx context.Context, c *tcp.Conn) {
@@ -137,6 +142,7 @@ func TestShutdownAbortsOnTimeout(t *testing.T) {
 	}
 }
 
+// Checks: TCP-04, TCP-20
 func TestServeContextCancelAborts(t *testing.T) {
 	s, err := tcp.Listen(context.Background(), "tcp", "127.0.0.1:0", func(ctx context.Context, _ *tcp.Conn) { <-ctx.Done() }, tcp.Options{})
 	if err != nil {
@@ -172,6 +178,7 @@ func (l *brokenListener) Accept() (net.Conn, error) {
 	return l.Listener.Accept()
 }
 
+// Checks: TCP-06
 func TestPermanentAcceptErrorAbortsHandlers(t *testing.T) {
 	inner, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

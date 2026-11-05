@@ -12,6 +12,7 @@ import (
 	"github.com/ninepeach/go-netx/tcp"
 )
 
+// Checks: SOCK-04
 func TestAcceptedConnInheritsBuffersDarwin(t *testing.T) {
 	const requested = 16 << 10
 	got := make(chan int, 1)

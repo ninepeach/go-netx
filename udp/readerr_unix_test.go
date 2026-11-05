@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+// Checks: OBS-04, UDP-09, UDP-11
 func TestFatalReadErrorStopsServe(t *testing.T) {
 	c, err := Listen(context.Background(), "udp", "127.0.0.1:0", func(*Conn, *Packet) {}, Options{Readers: 2})
 	if err != nil {
@@ -43,6 +44,7 @@ func TestFatalReadErrorStopsServe(t *testing.T) {
 	}
 }
 
+// Checks: UDP-10
 func TestCloseInterruptsBackoff(t *testing.T) {
 	c, err := Listen(context.Background(), "udp", "127.0.0.1:0", func(*Conn, *Packet) {}, Options{})
 	if err != nil {

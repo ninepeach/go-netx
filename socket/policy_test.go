@@ -10,6 +10,7 @@ import (
 
 // Runs on every platform, including Windows, where options_test.go
 // (unix-only) does not build.
+// Checks: SOCK-06, SOCK-08
 func TestFastOpenPolicy(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		t.Skip("requires kernel-specific expectations")

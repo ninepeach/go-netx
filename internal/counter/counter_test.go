@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// Checks: SYS-04
 func TestCounterOperations(t *testing.T) {
 	var c Counter
 	c.Add(2)
@@ -24,6 +25,7 @@ func TestCounterOperations(t *testing.T) {
 	}
 }
 
+// Checks: SYS-04
 func TestCounterMaxConcurrent(t *testing.T) {
 	var c Counter
 	var wg sync.WaitGroup
@@ -40,6 +42,7 @@ func TestCounterMaxConcurrent(t *testing.T) {
 	}
 }
 
+// Checks: NF-19
 func BenchmarkCounterInc(b *testing.B) {
 	var c Counter
 	b.ReportAllocs()

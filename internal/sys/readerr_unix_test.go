@@ -10,6 +10,7 @@ import (
 	"testing"
 )
 
+// Checks: SYS-01, UDP-08
 func TestClassifyRead(t *testing.T) {
 	wrap := func(e syscall.Errno) error {
 		return &net.OpError{Op: "read", Err: os.NewSyscallError("recvmsg", e)}

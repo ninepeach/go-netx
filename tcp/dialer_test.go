@@ -10,6 +10,7 @@ import (
 	"github.com/ninepeach/go-netx/tcp"
 )
 
+// Checks: DIAL-01
 func TestDialer(t *testing.T) {
 	t.Parallel()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -32,6 +33,7 @@ func TestDialer(t *testing.T) {
 	serverConn.Close()
 }
 
+// Checks: DIAL-05
 func TestDialEventSuccess(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -63,6 +65,7 @@ func TestDialEventSuccess(t *testing.T) {
 	}
 }
 
+// Checks: DIAL-02
 func TestDialEventFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

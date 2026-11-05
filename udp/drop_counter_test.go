@@ -2,6 +2,7 @@ package udp
 
 import "testing"
 
+// Checks: UDP-29
 func TestDropCounterWrapAndStaleReports(t *testing.T) {
 	var d dropCounter
 	d.last.Store(0xfffffff0)

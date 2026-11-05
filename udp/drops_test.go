@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// Checks: UDP-28, UDP-29
 func TestDropCounterWraps(t *testing.T) {
 	var d dropCounter
 	// The kernel count only moves forward, by less than 2^31 between reads.

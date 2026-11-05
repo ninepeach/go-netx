@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// Checks: QUEUE-03, QUEUE-15
 func TestRejectKeepsOwnership(t *testing.T) {
 	r := New(Options[int]{Cap: 2})
 	if !r.Push(1) || !r.Push(2) || r.Push(3) {
@@ -18,6 +19,7 @@ func TestRejectKeepsOwnership(t *testing.T) {
 	}
 }
 
+// Checks: QUEUE-01, QUEUE-04
 func TestDropOldestCallsOnDrop(t *testing.T) {
 	var dropped []int
 	r := New(Options[int]{Cap: 2, Policy: DropOldest, OnDrop: func(v int) { dropped = append(dropped, v) }})
@@ -32,12 +34,14 @@ func TestDropOldestCallsOnDrop(t *testing.T) {
 	}
 }
 
+// Checks: QUEUE-02
 func TestCapRoundsUp(t *testing.T) {
 	if c := New(Options[int]{Cap: 5}).Cap(); c != 8 {
 		t.Fatalf("cap=%d", c)
 	}
 }
 
+// Checks: QUEUE-10
 func TestPushWaitUnblocksOnPop(t *testing.T) {
 	r := New(Options[int]{Cap: 1})
 	r.Push(1)
@@ -53,6 +57,7 @@ func TestPushWaitUnblocksOnPop(t *testing.T) {
 	}
 }
 
+// Checks: QUEUE-11
 func TestPushWaitContext(t *testing.T) {
 	r := New(Options[int]{Cap: 1})
 	r.Push(1)
@@ -63,6 +68,7 @@ func TestPushWaitContext(t *testing.T) {
 	}
 }
 
+// Checks: QUEUE-06
 func TestCloseDrainsThenErrClosed(t *testing.T) {
 	r := New(Options[int]{Cap: 4})
 	r.Push(1)
@@ -78,6 +84,7 @@ func TestCloseDrainsThenErrClosed(t *testing.T) {
 	}
 }
 
+// Checks: QUEUE-08
 func TestCloseWakesWaiters(t *testing.T) {
 	r := New(Options[int]{Cap: 1})
 	var wg sync.WaitGroup
@@ -90,6 +97,7 @@ func TestCloseWakesWaiters(t *testing.T) {
 	wg.Wait()
 }
 
+// Checks: QUEUE-12
 func TestDrainReleases(t *testing.T) {
 	n := 0
 	r := New(Options[int]{Cap: 4, OnDrop: func(int) { n++ }})
@@ -101,6 +109,7 @@ func TestDrainReleases(t *testing.T) {
 	}
 }
 
+// Checks: NF-06, QUEUE-13
 func TestConcurrentNoLoss(t *testing.T) {
 	r := New(Options[int]{Cap: 64})
 	const producers, each = 8, 2000
@@ -136,6 +145,7 @@ func TestConcurrentNoLoss(t *testing.T) {
 	}
 }
 
+// Checks: NF-15, QUEUE-16
 func BenchmarkPushPop(b *testing.B) {
 	r := New(Options[int]{Cap: 1024})
 	b.ReportAllocs()
@@ -145,6 +155,7 @@ func BenchmarkPushPop(b *testing.B) {
 	}
 }
 
+// Checks: QUEUE-09
 func TestCloseWakesBlockedProducer(t *testing.T) {
 	r := New(Options[int]{Cap: 1})
 	if !r.Push(1) {
@@ -167,6 +178,7 @@ func TestCloseWakesBlockedProducer(t *testing.T) {
 	}
 }
 
+// Checks: QUEUE-07, QUEUE-17
 func TestCloseRacingPushPreservesBound(t *testing.T) {
 	r := New(Options[int]{Cap: 8, Policy: DropOldest})
 	var wg sync.WaitGroup

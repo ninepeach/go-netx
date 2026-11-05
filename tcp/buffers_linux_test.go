@@ -12,6 +12,7 @@ import (
 	"github.com/ninepeach/go-netx/tcp"
 )
 
+// Checks: SOCK-04
 func TestAcceptedConnInheritsBuffers(t *testing.T) {
 	got := make(chan int, 1)
 	s, _ := start(t, func(_ context.Context, c *tcp.Conn) {

@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// Checks: FLOW-01
 func TestIDsIncrease(t *testing.T) {
 	a, b := New(0), New(0)
 	if a.ID() == 0 || b.ID() <= a.ID() {
@@ -16,6 +17,7 @@ func TestIDsIncrease(t *testing.T) {
 	}
 }
 
+// Checks: FLOW-03, FLOW-04
 func TestCloseOnce(t *testing.T) {
 	f := New(0)
 	if !f.BeginClose() || f.BeginClose() || f.State() != Closing {
@@ -38,6 +40,7 @@ func TestCloseOnce(t *testing.T) {
 	}
 }
 
+// Checks: FLOW-02, FLOW-05
 func TestRemoveChecksEpoch(t *testing.T) {
 	var closed atomic.Int32
 	tb := NewTable(TableOptions[netip.AddrPort, int]{OnClose: func(netip.AddrPort, *Flow[int]) { closed.Add(1) }})
@@ -56,6 +59,7 @@ func TestRemoveChecksEpoch(t *testing.T) {
 	}
 }
 
+// Checks: FLOW-08
 func TestSweepIdle(t *testing.T) {
 	tb := NewTable(TableOptions[int, int]{IdleTimeout: time.Second})
 	tb.GetOrOpen(1, nil)
@@ -67,6 +71,7 @@ func TestSweepIdle(t *testing.T) {
 	}
 }
 
+// Checks: FLOW-13
 func TestRunClosesAllOnExit(t *testing.T) {
 	var closed atomic.Int32
 	tb := NewTable(TableOptions[int, int]{OnClose: func(int, *Flow[int]) { closed.Add(1) }})
@@ -81,6 +86,7 @@ func TestRunClosesAllOnExit(t *testing.T) {
 	}
 }
 
+// Checks: FLOW-16, NF-14
 func BenchmarkGetAddrPort(b *testing.B) {
 	tb := NewTable(TableOptions[netip.AddrPort, int]{})
 	key := netip.MustParseAddrPort("10.0.0.1:5000")
@@ -95,6 +101,7 @@ func BenchmarkGetAddrPort(b *testing.B) {
 
 // An active flow must never be evicted while it keeps being touched, with
 // Run sweeping concurrently.
+// Checks: FLOW-08, FLOW-09, NF-05
 func TestActiveFlowSurvivesSweep(t *testing.T) {
 	var evicted atomic.Int32
 	tb := NewTable(TableOptions[int, int]{
@@ -124,6 +131,7 @@ func TestActiveFlowSurvivesSweep(t *testing.T) {
 }
 
 // Without Run, a hand-driven Sweep must still see touches as fresh.
+// Checks: FLOW-10
 func TestManualSweepKeepsTouchedFlow(t *testing.T) {
 	tb := NewTable(TableOptions[int, int]{IdleTimeout: time.Second})
 	tb.GetOrOpen(1, nil)
@@ -141,6 +149,7 @@ func TestManualSweepKeepsTouchedFlow(t *testing.T) {
 }
 
 // GetOrOpen must construct a key's flow exactly once under concurrent access.
+// Checks: FLOW-07, NF-05
 func TestGetOrOpenConcurrentSingleCreation(t *testing.T) {
 	var created atomic.Int32
 	var closed atomic.Int32
@@ -181,6 +190,7 @@ func TestGetOrOpenConcurrentSingleCreation(t *testing.T) {
 }
 
 // A clock advanced by a future Sweep must not move backwards on a stale Sweep.
+// Checks: FLOW-11
 func TestSweepClockNeverMovesBackward(t *testing.T) {
 	tb := NewTable(TableOptions[int, int]{IdleTimeout: 20 * time.Second})
 	tb.GetOrOpen(1, nil)
@@ -198,6 +208,7 @@ func TestSweepClockNeverMovesBackward(t *testing.T) {
 }
 
 // Remove, Sweep and Close racing for the same flow must invoke OnClose once.
+// Checks: FLOW-06, FLOW-12, NF-05
 func TestConcurrentRemovalClosesFlowOnce(t *testing.T) {
 	var closed atomic.Int32
 	tb := NewTable(TableOptions[int, int]{

@@ -48,6 +48,7 @@ func (f *fake) Shutdown(context.Context) error {
 	return nil
 }
 
+// Checks: RUN-01
 func TestOrderAndShutdown(t *testing.T) {
 	f := newFake()
 	s := netx.NewServer(f)
@@ -73,6 +74,7 @@ func TestOrderAndShutdown(t *testing.T) {
 	}
 }
 
+// Checks: RUN-03
 func TestParentCancelDrainsNotAborts(t *testing.T) {
 	f := newFake()
 	s := netx.NewServer(f)
@@ -89,6 +91,7 @@ func TestParentCancelDrainsNotAborts(t *testing.T) {
 	}
 }
 
+// Checks: RUN-04
 func TestServeErrorStopsAndIsReturned(t *testing.T) {
 	f := newFake()
 	f.serveErr = errors.New("boom")
@@ -98,6 +101,7 @@ func TestServeErrorStopsAndIsReturned(t *testing.T) {
 	}
 }
 
+// Checks: RUN-05
 func TestStartErrorShutsDown(t *testing.T) {
 	f := newFake()
 	s := netx.NewServer(f)
@@ -107,6 +111,7 @@ func TestStartErrorShutsDown(t *testing.T) {
 	}
 }
 
+// Checks: RUN-02, RUN-06
 func TestOneShotAndPanic(t *testing.T) {
 	s := netx.NewServer(netx.ServiceFuncs{ServeFunc: func(context.Context) error { panic("x") }})
 	if err := s.LoopContext(context.Background()); err == nil || !strings.Contains(err.Error(), "panic") {
@@ -117,6 +122,7 @@ func TestOneShotAndPanic(t *testing.T) {
 	}
 }
 
+// Checks: RUN-07
 func TestStuckServiceBoundedByAbortGrace(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)
@@ -133,6 +139,7 @@ func TestStuckServiceBoundedByAbortGrace(t *testing.T) {
 	}
 }
 
+// Checks: INT-02, RUN-14
 func TestGroupWithRealTransports(t *testing.T) {
 	ctx := context.Background()
 	ts, err := tcp.Listen(ctx, "tcp", "127.0.0.1:0", func(_ context.Context, c *tcp.Conn) { _, _ = io.Copy(c, c) }, tcp.Options{})
@@ -171,6 +178,7 @@ func TestGroupWithRealTransports(t *testing.T) {
 	}
 }
 
+// Checks: RUN-08
 func TestOnStopGetsFreshContext(t *testing.T) {
 	s := netx.NewServer(slowDrain{})
 	s.ShutdownTimeout = 20 * time.Millisecond
@@ -193,6 +201,7 @@ func (slowDrain) Shutdown(ctx context.Context) error {
 	return ctx.Err()
 }
 
+// Checks: RUN-12
 func TestOnStopErrorIsReturned(t *testing.T) {
 	stopErr := errors.New("stop hook failed")
 	s := netx.NewServer(netx.ServiceFuncs{
@@ -215,6 +224,7 @@ func TestOnStopErrorIsReturned(t *testing.T) {
 	}
 }
 
+// Checks: RUN-08
 func TestOnStopHasIndependentTimeoutBudget(t *testing.T) {
 	s := netx.NewServer(netx.ServiceFuncs{
 		ServeFunc: func(ctx context.Context) error {

@@ -46,6 +46,7 @@ func dial(t testing.TB, c *udp.Conn) *net.UDPConn {
 	return cl
 }
 
+// Checks: OBS-03, UDP-01, UDP-03, UDP-17
 func TestEcho(t *testing.T) {
 	c := start(t, echo, udp.Options{})
 	cl := dial(t, c)
@@ -67,6 +68,7 @@ func TestEcho(t *testing.T) {
 	}
 }
 
+// Checks: UDP-02, UDP-07
 func TestReusePortReaders(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("SO_REUSEPORT is Linux-only in socket")
@@ -94,6 +96,7 @@ func TestReusePortReaders(t *testing.T) {
 	}
 }
 
+// Checks: OBS-04, UDP-06
 func TestTruncatedDropped(t *testing.T) {
 	got := make(chan int, 2)
 	c := start(t, func(_ *udp.Conn, p *udp.Packet) { got <- len(p.Data) }, udp.Options{MaxPacket: 8})
@@ -108,6 +111,7 @@ func TestTruncatedDropped(t *testing.T) {
 	}
 }
 
+// Checks: UDP-18
 func TestWriteTooLarge(t *testing.T) {
 	c := start(t, echo, udp.Options{MaxPacket: 8})
 	if err := c.WriteTo(make([]byte, 100), c.LocalAddr()); err != nil {
@@ -118,6 +122,7 @@ func TestWriteTooLarge(t *testing.T) {
 	}
 }
 
+// Checks: UDP-12
 func TestServeAfterCloseAndContextCancel(t *testing.T) {
 	c, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{})
 	if err != nil {
@@ -140,6 +145,7 @@ func TestServeAfterCloseAndContextCancel(t *testing.T) {
 	}
 }
 
+// Checks: UDP-15
 func TestHandlerDoesNotAllocate(t *testing.T) {
 	c := start(t, echo, udp.Options{})
 	cl := dial(t, c)
@@ -157,6 +163,7 @@ func TestHandlerDoesNotAllocate(t *testing.T) {
 	}
 }
 
+// Checks: NF-12
 func BenchmarkEcho(b *testing.B) {
 	c := start(b, echo, udp.Options{})
 	cl := dial(b, c)
@@ -171,6 +178,7 @@ func BenchmarkEcho(b *testing.B) {
 	}
 }
 
+// Checks: UDP-16, UDP-21, UDP-22
 func TestReplyValidatesPacket(t *testing.T) {
 	c := start(t, echo, udp.Options{Readers: 2})
 	if err := c.Reply(nil, []byte("x")); err != udp.ErrNilPacket {
@@ -189,6 +197,7 @@ func TestReplyValidatesPacket(t *testing.T) {
 	}
 }
 
+// Checks: UDP-14
 func TestMaxPacketBound(t *testing.T) {
 	if _, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{MaxPacket: udp.MaxDatagram + 1}); err == nil {
 		t.Fatal("MaxPacket above the limit accepted")
@@ -202,6 +211,7 @@ func TestMaxPacketBound(t *testing.T) {
 
 // With the default MaxPacket, a datagram at the limit is delivered and one
 // byte more is dropped as Truncated.
+// Checks: UDP-05, UDP-06, UDP-19
 func TestDefaultMaxDatagram(t *testing.T) {
 	got := make(chan int, 2)
 	c := start(t, func(_ *udp.Conn, p *udp.Packet) { got <- len(p.Data) }, udp.Options{})
@@ -218,6 +228,7 @@ func TestDefaultMaxDatagram(t *testing.T) {
 	}
 }
 
+// Checks: UDP-26, UDP-27
 func TestKernelDropsEnabled(t *testing.T) {
 	c := start(t, echo, udp.Options{})
 	if want := runtime.GOOS == "linux"; c.Stats().KernelDropsEnabled != want {
@@ -225,6 +236,7 @@ func TestKernelDropsEnabled(t *testing.T) {
 	}
 }
 
+// Checks: UDP-07, UDP-23, UDP-24
 func TestConcurrentWritesAndClose(t *testing.T) {
 	c, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{Readers: 2})
 	if err != nil {
@@ -257,6 +269,7 @@ func TestConcurrentWritesAndClose(t *testing.T) {
 	wg.Wait()
 }
 
+// Checks: UDP-25
 func TestConcurrentShutdown(t *testing.T) {
 	c, err := udp.Listen(context.Background(), "udp", "127.0.0.1:0", echo, udp.Options{Readers: 2})
 	if err != nil {
@@ -284,6 +297,7 @@ func TestConcurrentShutdown(t *testing.T) {
 }
 
 // Readers and MaxPacket reject negative values and normalize zero values.
+// Checks: UDP-13, UDP-14
 func TestListenOptionBoundaries(t *testing.T) {
 	for _, tc := range []struct {
 		name string

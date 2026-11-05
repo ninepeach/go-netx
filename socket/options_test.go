@@ -31,6 +31,7 @@ func socketIntOption(t *testing.T, c syscall.Conn, level, name int) int {
 	return value
 }
 
+// Checks: SOCK-01
 func TestListenConfigWithoutOptions(t *testing.T) {
 	lc := socket.ListenConfig(socket.Options{})
 	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -43,6 +44,7 @@ func TestListenConfigWithoutOptions(t *testing.T) {
 	}
 }
 
+// Checks: SOCK-02, SOCK-03
 func TestListenConfigAppliesBuffersBeforeBind(t *testing.T) {
 	const requested = 32 << 10
 	lc := socket.ListenConfig(socket.Options{
@@ -67,6 +69,7 @@ func TestListenConfigAppliesBuffersBeforeBind(t *testing.T) {
 	}
 }
 
+// Checks: SOCK-09
 func TestDialerCopiesBaseAndAppliesBuffers(t *testing.T) {
 	const requested = 32 << 10
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -101,6 +104,7 @@ func TestDialerCopiesBaseAndAppliesBuffers(t *testing.T) {
 	}
 }
 
+// Checks: SOCK-11
 func TestSetBuffersOnExistingConnection(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -138,6 +142,7 @@ func TestSetBuffersOnExistingConnection(t *testing.T) {
 	}
 }
 
+// Checks: SOCK-06
 func TestUnsupportedOptionsAreExplicitOnDarwin(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("Darwin-specific unsupported-option contract")

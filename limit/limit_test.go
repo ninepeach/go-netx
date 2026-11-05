@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// Checks: RES-01
 func TestConcurrency(t *testing.T) {
 	c := NewConcurrency(2)
 	if !c.TryAcquire() || !c.TryAcquire() {
@@ -22,6 +23,7 @@ func TestConcurrency(t *testing.T) {
 	}
 }
 
+// Checks: RES-02
 func TestConcurrencyParallel(t *testing.T) {
 	c := NewConcurrency(8)
 	var wg sync.WaitGroup
@@ -47,6 +49,7 @@ func TestConcurrencyParallel(t *testing.T) {
 	}
 }
 
+// Checks: RES-07
 func TestRate(t *testing.T) {
 	now := time.Unix(0, 0)
 	r := NewRate(10, 2)
@@ -60,6 +63,7 @@ func TestRate(t *testing.T) {
 	}
 }
 
+// Checks: RES-08
 func TestAllReleasesOnPartialFailure(t *testing.T) {
 	a, b := NewConcurrency(1), NewConcurrency(1)
 	b.TryAcquire()
@@ -71,6 +75,7 @@ func TestAllReleasesOnPartialFailure(t *testing.T) {
 	}
 }
 
+// Checks: RES-10
 func TestBudget(t *testing.T) {
 	b := NewBudget(100)
 	if !b.Reserve(60) || b.Reserve(50) || !b.Reserve(40) {
@@ -82,6 +87,7 @@ func TestBudget(t *testing.T) {
 	}
 }
 
+// Checks: RES-11, RES-12
 func TestBudgetRefusesNegative(t *testing.T) {
 	b := NewBudget(100)
 	if b.Reserve(-100) {
@@ -102,6 +108,7 @@ func TestBudgetRefusesNegative(t *testing.T) {
 	}
 }
 
+// Checks: RES-14
 func TestBudgetParallelNeverExceeds(t *testing.T) {
 	b := NewBudget(1000)
 	var wg sync.WaitGroup
@@ -126,6 +133,7 @@ func TestBudgetParallelNeverExceeds(t *testing.T) {
 	}
 }
 
+// Checks: RES-13
 func TestBudgetOverflow(t *testing.T) {
 	b := NewBudget(math.MaxInt64)
 	if !b.Reserve(1) {
@@ -142,6 +150,7 @@ func TestBudgetOverflow(t *testing.T) {
 	}
 }
 
+// Checks: RES-03
 func TestConcurrencyNeverExceedsMax(t *testing.T) {
 	c := NewConcurrency(4)
 	var wg sync.WaitGroup

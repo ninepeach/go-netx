@@ -21,6 +21,7 @@ func (drainForever) Shutdown(ctx context.Context) error {
 	return ctx.Err()
 }
 
+// Checks: RUN-09
 func TestSecondSignalAborts(t *testing.T) {
 	s := netx.NewServer(drainForever{})
 	s.Signals = []os.Signal{syscall.SIGUSR1}

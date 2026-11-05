@@ -6,6 +6,7 @@ import (
 	"github.com/ninepeach/go-netx/limit"
 )
 
+// Checks: BUF-01, BUF-02
 func TestGetClasses(t *testing.T) {
 	p := NewPool(nil)
 	for _, tc := range []struct{ n, cap int }{
@@ -19,6 +20,7 @@ func TestGetClasses(t *testing.T) {
 	}
 }
 
+// Checks: BUF-04
 func TestBudgetChargesCapacity(t *testing.T) {
 	budget := limit.NewBudget(Small * 2)
 	p := NewPool(budget)
@@ -36,6 +38,7 @@ func TestBudgetChargesCapacity(t *testing.T) {
 	}
 }
 
+// Checks: BUF-03
 func TestCopy(t *testing.T) {
 	p := NewPool(nil)
 	src := []byte("hello")
@@ -47,6 +50,7 @@ func TestCopy(t *testing.T) {
 	b.Release()
 }
 
+// Checks: BUF-05
 func TestDoubleReleasePanicsInDebug(t *testing.T) {
 	if !Debug {
 		t.Skip("needs -tags netxdebug")
@@ -62,6 +66,7 @@ func TestDoubleReleasePanicsInDebug(t *testing.T) {
 	b.Release()
 }
 
+// Checks: BUF-12, NF-16
 func BenchmarkGetRelease(b *testing.B) {
 	p := NewPool(nil)
 	b.ReportAllocs()
@@ -72,6 +77,7 @@ func BenchmarkGetRelease(b *testing.B) {
 	})
 }
 
+// Checks: BUF-04, BUF-13
 func TestReleaseClearsViewAndRefundsUnpooledCapacity(t *testing.T) {
 	const size = Large + 1
 	budget := limit.NewBudget(size)
@@ -92,6 +98,7 @@ func TestReleaseClearsViewAndRefundsUnpooledCapacity(t *testing.T) {
 	}
 }
 
+// Checks: BUF-04, BUF-14
 func TestBudgetRejectsLargeBufferWithoutPartialCharge(t *testing.T) {
 	budget := limit.NewBudget(Large)
 	p := NewPool(budget)
@@ -104,6 +111,7 @@ func TestBudgetRejectsLargeBufferWithoutPartialCharge(t *testing.T) {
 	}
 }
 
+// Checks: BUF-09
 func TestGetNegativeSizePanics(t *testing.T) {
 	defer func() {
 		if recover() == nil {
