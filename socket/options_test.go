@@ -5,6 +5,7 @@ package socket_test
 import (
 	"context"
 	"net"
+	"runtime"
 	"syscall"
 	"testing"
 
