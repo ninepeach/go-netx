@@ -78,7 +78,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-02 | P0 | RecvBuffer、SendBuffer 生效 | ✅ | `socket.ListenConfigAppliesBuffersBeforeBind` | RecvBuffer 和 SendBuffer 都检查了（unix） |
 | SOCK-03 | P0 | 缓冲区大小在 bind 之前设置（Control 阶段） | ✅ | `socket.ListenConfigAppliesBuffersBeforeBind` | 在 listener 上读取，证明是在 bind 前设置的 |
 | SOCK-04 | P1 | accept 出来的 TCP 连接继承 listener 的缓冲区设置 | ✅ | `tcp.AcceptedConnInheritsBuffersDarwin`<br>`tcp.AcceptedConnInheritsBuffers` | 分别在 Linux 和 macOS 上运行 |
-| SOCK-05 | P1 | 缓冲区与 ReusePort 组合使用时都生效 | ✅ | `socket.BuffersCombineWithReusePort` | 仅 Linux；FastOpen 单独按内核能力测试 |
+| SOCK-05 | P1 | 缓冲区与 ReusePort 组合生效；FastOpen 成功应用或明确报告不支持 | ✅ | `socket.BuffersCombineWithReusePort`<br>`socket.FastOpenAppliesOrReturnsUnsupported` | 仅 Linux；FastOpen 按内核能力断言 |
 | SOCK-06 | P1 | 不支持的平台返回 `UnsupportedOptionError`，`IsUnsupported` 能识别 | ✅ | `socket.FastOpenUnsupportedPlatforms`<br>`socket.UnsupportedOptionsAreExplicitOnDarwin` | FastOpenUnsupportedPlatforms 在非 Linux 平台运行，另一个只在 macOS 运行 |
 | SOCK-07 | P1 | 删除“忽略不支持”策略：不支持的请求始终返回错误 | ➖ |  | v2.0.0 移除 `UnsupportedPolicy` 和 `UnsupportedIgnore` |
 | SOCK-08 | P1 | 不支持选项的错误能向上传递 | ✅ | `socket.FastOpenUnsupportedPlatforms`<br>`socket.FastOpenAlwaysReportsUnsupportedKernelErrors` |  |
