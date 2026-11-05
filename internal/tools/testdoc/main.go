@@ -17,7 +17,10 @@
 //   - a checkpoint marked ❌, 🔧, ➖ or ⚙️ (enforced by a command, not a
 //     test function) has none;
 //   - every checkpoint a REG row points to exists;
-//   - docs/TESTING.md is up to date with the code.
+//   - docs/TESTING.md is up to date with the code;
+//   - every package has a design document in docs/design (DOC-02): the
+//     root package in runtime.md, internal packages as "## internal/<pkg>"
+//     sections of internal.md, every other package in <name>.md.
 //
 // Usage, from the repository root:
 //
@@ -137,6 +140,12 @@ func run(root string, write bool) ([]string, error) {
 			problems = append(problems, fmt.Sprintf("%s:%d: regression row points to unknown checkpoint %s", docPath, ref.line+1, ref.id))
 		}
 	}
+
+	design, err := checkDesignDocs(root)
+	if err != nil {
+		return nil, err
+	}
+	problems = append(problems, design...)
 
 	if write {
 		if err := os.WriteFile(filepath.Join(root, docPath), []byte(strings.Join(lines, "\n")), 0o644); err != nil {
@@ -288,4 +297,62 @@ func directive(doc *ast.CommentGroup) []string {
 		}
 	}
 	return ids
+}
+
+// checkDesignDocs reports packages without a design document.
+func checkDesignDocs(root string) ([]string, error) {
+	var problems []string
+	internal, _ := os.ReadFile(filepath.Join(root, "docs/design/internal.md"))
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(d.Name(), ".") && rel != "." || d.Name() == "testdata" || rel == "examples" || strings.HasPrefix(rel, "examples/") || rel == "docs" {
+			return filepath.SkipDir
+		}
+		if !hasPackage(path) {
+			return nil
+		}
+		switch {
+		case rel == ".":
+			if !exists(filepath.Join(root, "docs/design/runtime.md")) {
+				problems = append(problems, "docs/design/runtime.md: missing design document for the root package")
+			}
+		case strings.HasPrefix(rel, "internal/"):
+			if !strings.Contains(string(internal), "## "+rel+" ") && !strings.Contains(string(internal), "## "+rel+"\n") {
+				problems = append(problems, fmt.Sprintf("docs/design/internal.md: missing section \"## %s\"", rel))
+			}
+		default:
+			if !exists(filepath.Join(root, "docs/design", rel+".md")) {
+				problems = append(problems, fmt.Sprintf("docs/design/%s.md: missing design document for package %s", rel, rel))
+			}
+		}
+		return nil
+	})
+	return problems, err
+}
+
+// hasPackage reports whether dir holds non-test Go files.
+func hasPackage(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if !e.IsDir() && strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go") {
+			return true
+		}
+	}
+	return false
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

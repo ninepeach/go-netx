@@ -2,8 +2,9 @@
 
 Minimal, high-performance TCP and UDP foundation for Go gateways: no
 per-packet goroutines, no per-packet allocation, no internal queues, no
-dependencies. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and its
-frozen rules, and [docs/TESTING.md](docs/TESTING.md) for the test checklist.
+dependencies. See [ARCHITECTURE.md](ARCHITECTURE.md) for the overall design
+and its frozen rules, [docs/design](docs/design) for each package's design,
+and [docs/TESTING.md](docs/TESTING.md) for the test checklist.
 
 ```
 netx    runtime: start, signals, stop accepting → drain → abort
