@@ -37,8 +37,13 @@ var (
 	ErrTooLarge = errors.New("udp: datagram exceeds MaxDatagram")
 )
 
-// MaxDatagram is the largest UDP payload any IP version can carry.
+// MaxDatagram is the largest UDP payload any IP version can carry. It
+// limits sends.
 const MaxDatagram = 65535 - 8
+
+// MaxPacketLimit is the largest allowed Options.MaxPacket and its default.
+// Received datagrams longer than this are always dropped as Truncated.
+const MaxPacketLimit = 65000
 
 // Packet is one received datagram.
 type Packet struct {
@@ -72,9 +77,15 @@ type Options struct {
 	// go-netx does not cap it: sizing it to the host is the caller's job,
 	// typically no more than the number of CPUs.
 	Readers int
-	// MaxPacket is the receive buffer size per reader. Larger incoming
-	// datagrams are dropped and counted as Truncated. It does not limit
-	// sends. Default 65535.
+	// MaxPacket is the receive buffer size per reader, at most
+	// MaxPacketLimit (also the default). Larger incoming datagrams are
+	// dropped and counted as Truncated. It does not limit sends.
+	//
+	// Size it to the protocol: gateways whose datagrams fit in one MTU
+	// (game, media) do well with 1500-2048, which keeps reader buffers
+	// cache-friendly and surfaces oversized senders in Stats.Truncated.
+	// The buffer is allocated once per reader, so the default costs
+	// about 64KB per reader.
 	MaxPacket int
 	Socket    socket.Options
 }
@@ -154,14 +165,14 @@ func Listen(ctx context.Context, network, address string, h Handler, o Options) 
 	if o.Readers < 0 || o.MaxPacket < 0 {
 		return nil, errors.New("udp: options must not be negative")
 	}
-	if o.MaxPacket > 65535 {
-		return nil, errors.New("udp: MaxPacket above 65535 can never be filled")
+	if o.MaxPacket > MaxPacketLimit {
+		return nil, fmt.Errorf("udp: MaxPacket %d exceeds MaxPacketLimit %d", o.MaxPacket, MaxPacketLimit)
 	}
 	if o.Readers == 0 {
 		o.Readers = 1
 	}
 	if o.MaxPacket == 0 {
-		o.MaxPacket = 65535
+		o.MaxPacket = MaxPacketLimit
 	}
 	nsock := 1
 	if o.Socket.ReusePort {
