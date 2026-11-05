@@ -19,7 +19,6 @@ type Options struct {
     FastOpen   FastOpenOptions // TCP only; unsupported always returns an error
     ReusePort  bool            // Linux and macOS
     RecvBuffer, SendBuffer int // SO_RCVBUF / SO_SNDBUF when > 0
-    KeepAlive  KeepAlive       // Disable, Idle, Interval, Count; zero = Go default
 }
 type FastOpenOptions struct { Enabled bool; Backlog int }
 func ListenConfig(Options) net.ListenConfig
@@ -36,12 +35,6 @@ That is what makes them work: a TCP listener's buffer sizes and keep-alive
 are inherited by accepted connections (no per-connection syscalls), and
 TCP window scaling is negotiated with the larger buffer already in place.
 
-**Keep-alive** maps to Go's own fields: `Disable` sets `KeepAlive = -1`; any
-other non-zero setting becomes `net.KeepAliveConfig{Enable: true, …}`, and
-fields left at zero keep Go's defaults. The zero value changes nothing
-(Go's default: enabled, 15s). The listener's setting reaches accepted
-connections because Go applies `ListenConfig.KeepAliveConfig` on accept.
-
 **Fail fast.** A requested option either succeeds or returns an error.
 Unsupported platform/kernel features return `*UnsupportedOptionError`;
 other syscall errors are propagated unchanged. There is no ignore/fallback
@@ -56,7 +49,6 @@ Unix sockets, and any failure aborts socket creation.
 | Option | Linux | macOS | Windows |
 |---|---|---|---|
 | RecvBuffer / SendBuffer | ✓ | ✓ | ✓ |
-| KeepAlive idle/interval/count | ✓ | ✓ | ✓ |
 | ReusePort | ✓ | ✓ | unsupported error |
 | FastOpen | kernel-dependent | unsupported error | unsupported error |
 
