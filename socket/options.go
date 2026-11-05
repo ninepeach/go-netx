@@ -15,7 +15,7 @@ type FastOpenOptions struct {
 }
 
 // Options contains portable socket configuration. Platform-specific features
-// follow the policy configured by the caller.
+// return explicit errors when a requested feature is unavailable.
 type Options struct {
 	FastOpen  FastOpenOptions
 	ReusePort bool
