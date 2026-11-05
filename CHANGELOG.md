@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.0.0 (unreleased)
+
+### Changed
+
+- `socket`: remove `UnsupportedPolicy` and `UnsupportedIgnore`.
+  Requested socket options now fail explicitly when unsupported; there is
+  no silent fallback mode.
+
+### Migration
+
+- Remove the `Unsupported` field from `FastOpenOptions`. Handle
+  `UnsupportedOptionError` and omit Fast Open when the target platform or
+  kernel does not support it.
+
 ## v1.1.0 (unreleased)
 
 ### Added
