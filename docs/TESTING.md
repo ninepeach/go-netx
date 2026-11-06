@@ -231,10 +231,20 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | FLOW-13 | P1 | Run 退出时关闭所有 flow | ✅ | `flow.RunClosesAllOnExit` |  |
 | FLOW-14 | P2 | 大量 flow 下 Sweep 的耗时 | ✅ | `flow.BenchmarkSweepBySize` | 实测（2 vCPU）：1 万 flow 约 0.16ms，10 万约 3.4ms，100 万约 105ms；单个 flow 的成本随规模上升，原因是缓存未命中 |
 | FLOW-15 | P2 | 不同 key 哈希冲突时不会被合并 | ➖ |  | 用的是 Go map，key 按值比较，哈希只用来选分片 |
-| FLOW-16 | P2 | 查找零分配 | ✅ | `flow.BenchmarkGetAddrPort`<br>`flow.BenchmarkGetOrOpenExisting` |  |
+| FLOW-16 | P2 | 查找零分配 | ✅ | `flow.BenchmarkGetAddrPort`<br>`flow.BenchmarkGetAndTouch`<br>`flow.BenchmarkGetOrOpenExisting` |  |
 | FLOW-17 | P1 | 调用方先 `Flow.Close()`，再经 Remove、Sweep 或 Table.Close 离开表，`OnClose` 仍恰好调用一次 | ✅ | `flow.OnCloseRunsForFlowsClosedByTheCaller` |  |
 | FLOW-18 | P1 | `GetOrOpen` 的 newValue panic 后，panic 照常向上传播，分片锁被释放，表照常可用，且没有插入 flow | ✅ | `flow.GetOrOpenPanicReleasesShard` |  |
 | FLOW-19 | P1 | `Range` 的 fn panic 后，panic 照常向上传播，分片锁被释放，表照常可用 | ✅ | `flow.RangePanicReleasesShard` |  |
+| FLOW-20 | P0 | `Get` 是纯查找，不更新 LastSeen | ✅ | `flow.GetDoesNotTouch` |  |
+| FLOW-21 | P0 | `GetOrOpen` 找到已有 flow 时不更新 LastSeen，也不调用 newValue | ✅ | `flow.GetOrOpenExistingDoesNotTouch` |  |
+| FLOW-22 | P0 | 新 flow 创建时 LastSeen 已初始化：表内为表时钟，`New` 为当前时间 | ✅ | `flow.NewFlowLastSeenInitialised` |  |
+| FLOW-23 | P0 | `Touch` 把 LastSeen 更新为表时钟（`New` 创建的用当前时间），不改变 State，不会倒退；`GetAndTouch` 同样生效 | ✅ | `flow.TouchUpdatesLastSeen` |  |
+| FLOW-24 | P1 | 并发 `Touch` 安全，结果为最新时钟 | ✅ | `flow.ConcurrentTouch` |  |
+| FLOW-25 | P0 | Closing、Closed 的 flow 不能被 `Touch` 重新激活（LastSeen 不变，State 不变）；仍按旧 LastSeen 被 Sweep 清理 | ✅ | `flow.TouchDoesNotReviveClosingOrClosed` |  |
+| FLOW-26 | P0 | 只 `Get`、`GetOrOpen`、`Range` 而不 `Touch` 时，flow 照常按空闲超时被清理 | ✅ | `flow.GetWithoutTouchStillExpires` |  |
+| FLOW-27 | P0 | `Get` 后 `Touch`，在 IdleTimeout 内不会被清理，超过后被清理 | ✅ | `flow.TouchKeepsFlowUntilIdle` |  |
+| FLOW-28 | P0 | `Touch` 与 `Sweep` 并发：要么 Touch 先生效、flow 保留且 LastSeen 为新值，要么 Sweep 先决定、flow 以旧 LastSeen 关闭并离开表、OnClose 一次；之后 Touch 无效 | ✅ | `flow.TouchRacingSweep` |  |
+| FLOW-29 | P1 | `Remove` 之后 `Touch` 无效：LastSeen 不变、状态为 Closed、不会回到表中 | ✅ | `flow.TouchAfterRemoveHasNoEffect` |  |
 
 ## 6. limit：资源控制
 
@@ -461,6 +471,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-17 | Linux 上默认用 recvmmsg 批量读取（`Batch` 默认 8） | 实测有积压时每个数据报的接收开销降低约 44%，且不增加延迟（不等凑满）。代价是每个 reader 的内存变为 Batch × MaxPacket，默认约 520KB；小包网关应设置 MaxPacket。32 比 8 提升很小但内存翻 4 倍，所以默认取 8 |
 | D-18 | 只影响性能的选项在平台做不到时照常运行，影响行为的选项做不到时报错 | 要求同一份配置在 Mac 开发机和 Linux 上都能运行。监听端 FastOpen（省一个往返）、`Batch`（每次系统调用收几个包）、macOS 上的 ReusePort（能绑定但不分流）只影响性能，做不到时按普通方式运行，并由 `socket.Supported()`、`udp.Conn.Batch()` 报告实际情况；能做到的平台尽量真实现（macOS 监听端 FastOpen）。不适用于当前网络类型的选项（D-14）、达不到请求大小的缓冲区（D-16）、其他平台上的 ReusePort（第二次绑定会失败）会改变行为，仍然报错 |
 | D-19 | 拨出方向不支持 FastOpen，Dialer 设置了就报错 | 实测 Linux 上拿到 TFO cookie 后，用 FastOpen 拨一个已关闭的端口，Dial 约 100µs 返回成功，Write 也成功，错误到 Read 才出现，Dial 超时和 `DialEvent` 不再反映对端是否可达，网关会把挂掉的上游当成可用。这会改变行为，不属于 D-18 的性能项。网关拨上游通常不需要省这一个往返；监听端 FastOpen 保留 |
+| D-20 | `Get` 只查找，`Touch` 是唯一更新 LastSeen 的操作 | 查找时顺带刷新时间，会让后台查询、`Range`、管理操作把空闲 flow 一直续命。拆开后，空闲超时只反映网关显式记录的真实流量。查找与 Touch 之间被 Sweep 插入的竞态（REG-15）改用“LastSeen 加冻结位”的单字 CAS 解决。代价：网关在收到数据时要自己调用 `Touch` 或 `GetAndTouch`；`Get` 因此更快 |
 
 ## 12.1 文档一致性
 
@@ -488,7 +499,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | NF-12 | Bench | UDP 回显 | ✅ | `udp.BenchmarkEcho` | 约 10µs，0 次分配 |
 | NF-22 | Bench | UDP 接收（队列中有积压时每个数据报的接收开销），按 Batch 1、8、32 对比 | ✅ | `udp.BenchmarkRecv` | 2 vCPU：Batch 1 约 2.2µs，Batch 8 约 1.2µs，0 次分配 |
 | NF-13 | Bench | TCP accept 吞吐 | ✅ | `tcp.BenchmarkAccept` | 实测约 79µs/连接（建立、接受、关闭），23 次分配 |
-| NF-14 | Bench | 不同 flow 数量下的查找和清扫 | ✅ | `flow.BenchmarkGetAddrPort`<br>`flow.BenchmarkGetBySize`<br>`flow.BenchmarkGetOrOpenExisting`<br>`flow.BenchmarkSweepBySize` | `flow.BenchmarkGetBySize`、`flow.BenchmarkSweepBySize` |
+| NF-14 | Bench | 不同 flow 数量下的查找和清扫 | ✅ | `flow.BenchmarkGetAddrPort`<br>`flow.BenchmarkGetAndTouch`<br>`flow.BenchmarkGetBySize`<br>`flow.BenchmarkGetOrOpenExisting`<br>`flow.BenchmarkSweepBySize` | `flow.BenchmarkGetBySize`、`flow.BenchmarkSweepBySize` |
 | NF-15 | Bench | Queue | ✅ | `queue.BenchmarkPushPop` |  |
 | NF-16 | Bench | Buf | ✅ | `buf.BenchmarkGetRelease` |  |
 | NF-19 | Bench | 共享计数器 | ✅ | `counter.BenchmarkCounterInc` |  |
@@ -528,7 +539,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 
 ### 14.4 并发与竞态
 
-- [ ] “查找”和“更新状态”要在同一把锁内完成，否则清理任务可能插在两者之间（REG-15）。
+- [ ] 清理任务可能插在“查找”和“更新状态”之间（REG-15）：要么在同一把锁内完成，要么像 `flow.Touch` 那样用一次 CAS 判定先后，并让输的一方明确失效。
 - [ ] 后台任务推进的共享时钟，在手动调用时也要推进（REG-11）。
 - [ ] 关闭和新请求之间的竞态窗口：刚 accept 进来的连接，在关闭时也要被登记或释放（TCP-19）。
 - [ ] 回调不要在持锁时调用，或者在文档中明确写出持锁回调的约束。

@@ -4,6 +4,11 @@
 
 ### Added
 
+- flow: `Flow.Touch` records activity and is now the only way `LastSeen`
+  changes after creation; `Table.GetAndTouch` is the lookup-plus-Touch
+  shortcut for the per-packet path. A Touch after `BeginClose`, `Close`,
+  `Remove` or eviction has no effect, and a Touch racing `Sweep` either
+  keeps the flow or is discarded, decided by one CAS.
 - `socket.Options.KeepAlive`: TCP keep-alive idle time, probe interval and
   probe count, or `Disable`. Applies to listeners (inherited by accepted
   connections) and dialers; the zero value keeps Go's default.
@@ -35,6 +40,12 @@
 
 ### Changed
 
+- flow: `Table.Get` is a pure lookup and `GetOrOpen` no longer refreshes
+  an existing flow's `LastSeen`; a new flow's `LastSeen` starts at the
+  table clock. **Behaviour change:** code that relied on lookups to keep
+  flows from idle expiry must call `Flow.Touch` (or `GetAndTouch`) when
+  data arrives. `Get` is faster as a result (112ns instead of 210ns at 1M
+  flows, 2 vCPU).
 - flow: `TableOptions.OnClose` now runs for every flow that leaves the
   table, also when the caller had already closed it with `Flow.Close`;
   before, such flows left without `OnClose`. **Behaviour change:** release

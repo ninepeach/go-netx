@@ -120,6 +120,7 @@ func TestUDPGatewayComposition(t *testing.T) {
 
 	conn, err := udp.Listen(ctx, "udp", "127.0.0.1:0", func(_ *udp.Conn, p *udp.Packet) {
 		f, _ := flows.GetOrOpen(p.From, func() *peer { return newPeer(p.From) })
+		f.Touch()              // a datagram arrived: record the traffic for idle expiry
 		b := pool.Copy(p.Data) // borrowed → owned
 		if b == nil {
 			return // over budget: drop

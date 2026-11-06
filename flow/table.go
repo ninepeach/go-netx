@@ -66,24 +66,35 @@ func (t *Table[K, V]) shard(k K) *shard[K, V] {
 	return &t.shards[maphash.Comparable(t.seed, k)&t.mask]
 }
 
-// Get returns the flow for k and marks it as seen. The touch happens under
-// the shard lock, so Sweep cannot evict a flow between lookup and touch.
-// A returned flow can still be closed later by Remove, Sweep or Close;
-// check State before relying on it.
+// Get returns the flow for k. It is a pure lookup: it does not change
+// LastSeen, so management and background code can inspect flows without
+// keeping them alive. Call Flow.Touch (or use GetAndTouch) when the lookup
+// is for real traffic. A returned flow can still be closed later by Remove,
+// Sweep or Close; check State before relying on it.
 func (t *Table[K, V]) Get(k K) (*Flow[V], bool) {
 	s := t.shard(k)
 	s.mu.Lock()
 	f, ok := s.m[k]
-	if ok {
-		f.lastSeen.Store(t.now.Load())
-	}
 	s.mu.Unlock()
 	return f, ok
 }
 
-// GetOrOpen returns the flow for k, creating it with newValue if absent.
-// newValue runs under the shard lock and must be fast. If it panics, the
-// panic propagates, no flow is inserted and the shard stays usable.
+// GetAndTouch is Get followed by Flow.Touch, for the per-packet path. If
+// Sweep evicts the flow between the two, the Touch has no effect and the
+// returned flow is no longer Open.
+func (t *Table[K, V]) GetAndTouch(k K) (*Flow[V], bool) {
+	f, ok := t.Get(k)
+	if ok {
+		f.Touch()
+	}
+	return f, ok
+}
+
+// GetOrOpen returns the flow for k, creating it with newValue if absent. A
+// new flow's LastSeen starts at the table clock; finding an existing flow
+// does not change its LastSeen. newValue runs under the shard lock and must
+// be fast. If it panics, the panic propagates, no flow is inserted and the
+// shard stays usable.
 func (t *Table[K, V]) GetOrOpen(k K, newValue func() V) (f *Flow[V], created bool) {
 	s := t.shard(k)
 	s.mu.Lock()
@@ -94,10 +105,9 @@ func (t *Table[K, V]) GetOrOpen(k K, newValue func() V) (f *Flow[V], created boo
 		if newValue != nil {
 			v = newValue()
 		}
-		f = New(v)
+		f = newInTable(v, &t.now)
 		s.m[k] = f
 	}
-	f.lastSeen.Store(t.now.Load())
 	return f, !ok
 }
 
@@ -112,6 +122,7 @@ func (t *Table[K, V]) Remove(k K, id uint64) bool {
 		s.mu.Unlock()
 		return false
 	}
+	f.freeze() // no Touch from here on
 	delete(s.m, k)
 	s.mu.Unlock()
 	t.closed(k, f)
@@ -165,8 +176,9 @@ func (s *shard[K, V]) rangeLocked(fn func(K, *Flow[V]) bool) bool {
 	return true
 }
 
-// Sweep evicts flows idle longer than IdleTimeout as of now and returns how
-// many it evicted. It also advances the table clock to now, so touches made
+// Sweep evicts flows whose LastSeen is older than IdleTimeout as of now and
+// returns how many it evicted. A flow touched before Sweep decides is kept;
+// a Touch after the decision has no effect. It also advances the table clock to now, so touches made
 // after a manual Sweep are recorded at the new time; without that, a table
 // swept by hand instead of by Run would see every flow as idle. Run calls
 // Sweep periodically.
@@ -191,7 +203,7 @@ func (t *Table[K, V]) Sweep(now time.Time) int {
 		s := &t.shards[i]
 		s.mu.Lock()
 		for k, f := range s.m {
-			if f.lastSeen.Load() < cutoff {
+			if f.expire(cutoff) {
 				delete(s.m, k)
 				victims = append(victims, victim{k, f})
 			}

@@ -19,7 +19,7 @@ func FuzzTableOps(f *testing.F) {
 		model := map[byte]uint64{} // key → current flow ID
 		var removed []uint64       // IDs that left the table
 		for i := 0; i+1 < len(ops); i += 2 {
-			op, key := ops[i]%5, ops[i+1]%8
+			op, key := ops[i]%6, ops[i+1]%8
 			switch op {
 			case 0: // GetOrOpen
 				fl, created := tb.GetOrOpen(key, nil)
@@ -47,6 +47,19 @@ func FuzzTableOps(f *testing.F) {
 					stale := removed[int(key)%len(removed)]
 					if tb.Remove(key, stale) {
 						t.Fatalf("stale ID %d removed key %d", stale, key)
+					}
+				}
+			case 5: // a lookup never changes LastSeen; Touch never moves it back
+				if fl, ok := tb.Get(key); ok {
+					before := fl.LastSeen()
+					tb.Get(key)
+					tb.GetOrOpen(key, nil)
+					if fl.LastSeen() != before {
+						t.Fatalf("lookup of %d changed LastSeen", key)
+					}
+					fl.Touch()
+					if fl.LastSeen() < before {
+						t.Fatalf("Touch moved LastSeen of %d backwards", key)
 					}
 				}
 			case 4: // Close everything

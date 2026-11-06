@@ -66,6 +66,7 @@ func TestStressGatewayLongRun(t *testing.T) {
 	}
 	conn, err := udp.Listen(ctx, "udp", "127.0.0.1:0", func(_ *udp.Conn, p *udp.Packet) {
 		f, _ := flows.GetOrOpen(p.From, func() *peer { return newPeer(p.From) })
+		f.Touch() // traffic keeps the flow from idle expiry
 		if b := pool.Copy(p.Data); b != nil && !f.Value.out.Push(b) {
 			b.Release()
 		}
