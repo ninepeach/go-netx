@@ -101,6 +101,8 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-25 | P1 | `SetBuffers` 作用于已有连接时同样校验 | ✅ | `socket.BufferCapOnLinux` | 仅 Linux |
 | SOCK-26 | P1 | macOS：FastOpen 在监听 socket 上设置 `TCP_FASTOPEN`；拨出方向不带 FastOpen 照常连接 | ⚠️ | `socket.FastOpenOnDarwin` | 测试已写好，只在 macOS 上运行；当前开发环境只做了编译验证 |
 | SOCK-27 | P1 | `socket.Supported()` 如实报告当前平台实现了哪些性能选项（Linux、macOS、FreeBSD、其他） | ✅ | `socket.SupportedMatchesPlatform` | 所有平台运行 |
+| SOCK-28 | P0 | `socket.Dialer` 设置了 FastOpen 时拨号报 `UnsupportedOptionError`：拨出方向的 FastOpen 会让已关闭的对端看起来连接成功（D-19） | 🔧 |  |  |
+| SOCK-29 | P0 | `socket.Dialer` 保留调用方的 `Control` 和 `ControlContext`，先执行调用方的，再应用 go-netx 的选项；base 设置了 `ControlContext` 时选项照样生效 | 🔧 |  |  |
 
 ## 3. tcp：TCP 传输
 
@@ -181,6 +183,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | UDP-35 | P1 | 一批中间夹着超过 `MaxPacket` 的数据报时，只丢弃并计数这一个，前后的照常交付 | ✅ | `udp.TruncatedInsideBurst` |  |
 | UDP-36 | P1 | 批量读取时内核丢包计数仍然生效 | ✅ | `udp.KernelDropsCountedWithBatch` | 仅 Linux |
 | UDP-37 | P1 | `Conn.Batch()` 返回实际生效的批量：Linux 上为设置值或默认 8；没有 recvmmsg 的平台上任何设置都为 1，且照常收发 | ✅ | `udp.BatchInEffect` | 按平台分别断言 |
+| UDP-38 | P1 | 多个 reader 共用一个 socket（`Readers` > 1 且未开 ReusePort）时，`Batch` 默认取 1，显式设置的值照用 | 🔧 |  |  |
 
 ### 4.2 发送与 Reply
 
@@ -324,6 +327,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | STREAM-06 | P1 | 底层读错误（包括 EOF）正确传递，已缓冲的数据先交给调用方 | ✅ | `stream.SourceErrorsAfterData` |  |
 | STREAM-07 | P1 | `Release` 归还所有缓冲区，之后的调用返回错误；选项非法时构造函数 panic | ✅ | `stream.ReleaseAndOptions` |  |
 | STREAM-08 | P2 | 大量空闲连接下，每个连接的缓冲区开销（压测中实测，并与固定 4KB 缓冲区对比） | ✅ | `stream.StressIdleReaderMemory` | 实测（4000 个空闲连接）：每个连接比固定 4KB 的 bufio.Reader 少约 3.6KB，比不用缓冲区多约 430 字节 |
+| STREAM-16 | P1 | 数据源连续多次返回 `(0, nil)` 时，`Peek`、`Fill`、`Read` 返回 `io.ErrNoProgress`，不空转 | 🔧 |  |  |
 
 ### 8.5.2 Writer
 
@@ -413,6 +417,10 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | REG-16 | udp | 永久读错误会无限重试 | UDP-11 | ✅ |
 | REG-17 | tcp | 永久 accept 错误时，等待长连接 handler 导致无法退出 | TCP-06 | ✅ |
 | REG-18 | udp | `KernelDrops` 在 32 位回绕后停止增长 | UDP-28 | ✅ |
+| REG-19 | socket | Dialer 开启 FastOpen 后，拿到 TFO cookie 的对端即使已关闭，Dial 也返回成功，错误到 Read 才出现；Dial 超时和 `DialEvent` 失效 | SOCK-28 | 🔧 |
+| REG-20 | socket | `socket.Dialer` 覆盖调用方的 `Control`；base 设置了 `ControlContext` 时，net 包忽略 `Control`，所有 socket 选项被静默跳过 | SOCK-29 | 🔧 |
+| REG-21 | udp | 多个 reader 共用一个 socket 时，默认 Batch 8 让一个 reader 一次取走多个包串行处理，其他 reader 空闲，并行度下降 | UDP-38 | 🔧 |
+| REG-22 | stream | 数据源一直返回 `(0, nil)` 时 `Peek` 死循环（实测 300ms 空转 8100 万次） | STREAM-16 | 🔧 |
 
 ### 设计决定
 
