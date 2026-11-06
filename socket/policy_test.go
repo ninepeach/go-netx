@@ -2,16 +2,19 @@ package socket_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"runtime"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/ninepeach/go-netx/socket"
 )
 
-// One configuration with Fast Open works on every platform: where Fast
-// Open is unavailable the sockets run without it.
+// One listener configuration with Fast Open works on every platform: where
+// Fast Open is unavailable the listener runs without it.
 // Checks: SOCK-06
 func TestFastOpenConfigurationRunsEverywhere(t *testing.T) {
 	opts := socket.Options{FastOpen: socket.FastOpenOptions{Enabled: true, Backlog: 16}}
@@ -27,10 +30,9 @@ func TestFastOpenConfigurationRunsEverywhere(t *testing.T) {
 			c.Close()
 		}
 	}()
-	d := socket.Dialer(net.Dialer{}, opts)
-	c, err := d.DialContext(context.Background(), "tcp", ln.Addr().String())
+	c, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
-		t.Fatalf("Dial with Fast Open on %s: %v", runtime.GOOS, err)
+		t.Fatal(err)
 	}
 	defer c.Close()
 	b := make([]byte, 2)
@@ -42,7 +44,7 @@ func TestFastOpenConfigurationRunsEverywhere(t *testing.T) {
 // Checks: SOCK-27
 func TestSupportedMatchesPlatform(t *testing.T) {
 	want := map[string]socket.Capabilities{
-		"linux":   {FastOpenListen: true, FastOpenDial: true, ReusePortBalanced: true},
+		"linux":   {FastOpenListen: true, ReusePortBalanced: true},
 		"darwin":  {FastOpenListen: true},
 		"freebsd": {ReusePortBalanced: true},
 	}[runtime.GOOS]
@@ -85,4 +87,77 @@ func TestTCPOnlyOptionsOnUDPAreRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	pc.Close()
+}
+
+// Checks: SOCK-28
+func TestDialerRefusesFastOpen(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	d := socket.Dialer(net.Dialer{}, socket.Options{FastOpen: socket.FastOpenOptions{Enabled: true}})
+	c, err := d.DialContext(context.Background(), "tcp", ln.Addr().String())
+	if err == nil {
+		c.Close()
+		t.Fatal("Dial with Fast Open succeeded; a dead peer could look connected")
+	}
+	var uoe *socket.UnsupportedOptionError
+	if !errors.As(err, &uoe) || uoe.Option != "TCP Fast Open" || uoe.Platform != "dialed connections" {
+		t.Fatalf("err = %v, want UnsupportedOptionError for dialed connections", err)
+	}
+}
+
+// Checks: SOCK-29
+func TestDialerKeepsCallerControl(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+	// An option go-netx refuses on dial shows that its control ran after
+	// the caller's.
+	refused := socket.Options{FastOpen: socket.FastOpenOptions{Enabled: true}}
+
+	var calls []string
+	base := net.Dialer{
+		Control: func(string, string, syscall.RawConn) error { calls = append(calls, "Control"); return nil },
+		ControlContext: func(context.Context, string, string, syscall.RawConn) error {
+			calls = append(calls, "ControlContext")
+			return nil
+		},
+	}
+	d := socket.Dialer(base, refused)
+	if _, err := d.DialContext(context.Background(), "tcp", addr); !socket.IsUnsupported(err) {
+		t.Fatalf("options skipped when ControlContext is set: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != "ControlContext" {
+		t.Fatalf("calls %v, want only ControlContext (net ignores Control when both are set)", calls)
+	}
+	if base.Control == nil || base.ControlContext == nil {
+		t.Fatal("base dialer was modified")
+	}
+
+	calls = nil
+	d = socket.Dialer(net.Dialer{Control: base.Control}, refused)
+	if _, err := d.DialContext(context.Background(), "tcp", addr); !socket.IsUnsupported(err) || len(calls) != 1 || calls[0] != "Control" {
+		t.Fatalf("Control only: err %v calls %v", err, calls)
+	}
+
+	// The caller's error stops the dial before the options are applied.
+	mine := errors.New("caller refused")
+	d = socket.Dialer(net.Dialer{Control: func(string, string, syscall.RawConn) error { return mine }}, refused)
+	if _, err := d.DialContext(context.Background(), "tcp", addr); !errors.Is(err, mine) {
+		t.Fatalf("caller error: %v", err)
+	}
+
+	// Both run and the dial succeeds when nothing refuses.
+	calls = nil
+	d = socket.Dialer(net.Dialer{ControlContext: base.ControlContext}, socket.Options{KeepAlive: socket.KeepAlive{Idle: time.Minute}})
+	c, err := d.DialContext(context.Background(), "tcp", addr)
+	if err != nil || len(calls) != 1 {
+		t.Fatalf("dial: %v calls %v", err, calls)
+	}
+	c.Close()
 }

@@ -12,7 +12,7 @@ const soReusePortLB = 0x00010000
 // Fast Open is not implemented here; sockets run without it (D-18).
 var platformCapabilities = Capabilities{ReusePortBalanced: true}
 
-func applyOptions(fd uintptr, opts Options, _ bool) error {
+func applyOptions(fd uintptr, opts Options) error {
 	if opts.ReusePort {
 		if err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, soReusePortLB, 1); err != nil {
 			return err

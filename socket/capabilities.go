@@ -7,11 +7,9 @@ package socket
 // (Linux net.ipv4.tcp_fastopen, macOS net.inet.tcp.fastopen), which runs
 // the same way. Options that change behaviour still fail when unsupported.
 type Capabilities struct {
-	// FastOpenListen: TCP Fast Open on listeners.
+	// FastOpenListen: TCP Fast Open on listeners. Dialers never use Fast
+	// Open (D-19).
 	FastOpenListen bool
-	// FastOpenDial: TCP Fast Open on dialed connections. macOS needs
-	// connectx() for it, which the net package does not use.
-	FastOpenDial bool
 	// ReusePortBalanced: ReusePort spreads connections and datagrams
 	// across the sockets. macOS binds but does not spread.
 	ReusePortBalanced bool
