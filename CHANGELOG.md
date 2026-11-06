@@ -30,11 +30,24 @@
   Where `recvmmsg` is unavailable (macOS, Windows) any `Batch` reads one
   datagram per call; `Conn.Batch()` reports the size in effect.
 - socket: `Supported()` reports which performance options the platform
-  implements (`FastOpenListen`, `FastOpenDial`, `ReusePortBalanced`).
+  implements (`FastOpenListen`, `ReusePortBalanced`).
 - socket: TCP Fast Open on macOS listeners (`TCP_FASTOPEN`).
 
 ### Changed
 
+- socket: `Dialer` refuses `FastOpen` with `UnsupportedOptionError`
+  (D-19). With a cached TFO cookie a Fast Open dial to a closed port
+  succeeded and the error appeared only at Read, so dial timeouts and
+  `tcp.DialEvent` no longer reflected reachability. Listeners keep Fast
+  Open. **Breaking:** remove `FastOpen` from dialer options.
+- socket: `Dialer` keeps the caller's `Control` / `ControlContext` and runs
+  it before applying the options. Before, `Control` was replaced, and a
+  `ControlContext` on the base dialer made every option silently skipped.
+- udp: when several readers share one socket (`Readers` > 1 without
+  `ReusePort`), `Batch` defaults to 1 so handlers keep running in
+  parallel; an explicit `Batch` is used as given.
+- stream: `Reader` returns `io.ErrNoProgress` after 100 reads in a row
+  that return no data and no error, instead of spinning.
 - socket: remove `UnsupportedPolicy` and `UnsupportedIgnore`. One
   configuration now runs on every platform: options that only affect
   performance (Fast Open, `udp.Options.Batch`) run without the

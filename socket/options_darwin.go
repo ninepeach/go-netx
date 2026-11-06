@@ -13,16 +13,14 @@ var platformCapabilities = Capabilities{FastOpenListen: true}
 
 // macOS accepts SO_REUSEPORT but does not balance load across the sockets:
 // one of them receives everything. It is supported so the same
-// configuration runs on a development Mac and a Linux server. Client-side
-// Fast Open needs connectx(), which the net package does not use, so a
-// dialed connection runs without it.
-func applyOptions(fd uintptr, opts Options, outbound bool) error {
+// configuration runs on a development Mac and a Linux server.
+func applyOptions(fd uintptr, opts Options) error {
 	if opts.ReusePort {
 		if err := syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1); err != nil {
 			return err
 		}
 	}
-	if opts.FastOpen.Enabled && !outbound {
+	if opts.FastOpen.Enabled {
 		return fastOpenResult(syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpFastOpenDarwin, 1))
 	}
 	return nil

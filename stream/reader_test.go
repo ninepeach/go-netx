@@ -216,3 +216,48 @@ func TestReleaseAndOptions(t *testing.T) {
 		NewReader(&chunks{}, nil, ReaderOptions{})
 	}()
 }
+
+// emptyReader returns (0, nil) for its first empty reads, then data.
+type emptyReader struct {
+	empty, calls int
+	data         string
+}
+
+func (e *emptyReader) Read(p []byte) (int, error) {
+	e.calls++
+	if e.calls <= e.empty {
+		return 0, nil
+	}
+	return copy(p, e.data), nil
+}
+
+// Checks: STREAM-16
+func TestEmptyReadsDoNotSpin(t *testing.T) {
+	pool := buf.NewPool(nil)
+	for name, call := range map[string]func(*Reader) error{
+		"Peek": func(r *Reader) error { _, err := r.Peek(4); return err },
+		"Fill": func(r *Reader) error { return r.Fill() },
+		"Read": func(r *Reader) error { _, err := r.Read(make([]byte, 4)); return err },
+	} {
+		src := &emptyReader{empty: 1 << 30}
+		r := NewReader(src, pool, ReaderOptions{})
+		if err := call(r); !errors.Is(err, io.ErrNoProgress) {
+			t.Fatalf("%s: err = %v after %d reads, want io.ErrNoProgress", name, err, src.calls)
+		}
+		if src.calls != 100 {
+			t.Fatalf("%s: %d reads, want 100", name, src.calls)
+		}
+		// Not sticky: once the source produces data, the Reader works.
+		src.empty, src.data = src.calls, "data"
+		if err := call(r); err != nil {
+			t.Fatalf("%s after progress: %v", name, err)
+		}
+		r.Release()
+	}
+	// Fewer than 100 empty reads are retried transparently.
+	r := NewReader(&emptyReader{empty: 99, data: "abcd"}, pool, ReaderOptions{})
+	if b, err := r.Peek(4); err != nil || string(b) != "abcd" {
+		t.Fatalf("Peek after 99 empty reads: %q, %v", b, err)
+	}
+	r.Release()
+}

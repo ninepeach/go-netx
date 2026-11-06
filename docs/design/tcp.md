@@ -38,7 +38,7 @@ func (*Conn) ID() uint64                      // unique per process
 func (*Conn) Draining() <-chan struct{}
 func (*Conn) WriteBuffers(*net.Buffers) (int64, error)
 
-func NewDialer(DialOptions) *Dialer           // Timeout, KeepAlive, Socket, OnDial
+func NewDialer(DialOptions) *Dialer           // Timeout, KeepAlive, Socket (no FastOpen, D-19), OnDial
 func (*Dialer) DialContext(ctx, network, address string) (net.Conn, error)
 var ErrClosed
 ```

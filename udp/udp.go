@@ -1,8 +1,8 @@
 // Package udp is a datagram transport with no per-packet goroutines, no
 // per-packet allocation and no internal queue.
 //
-// Each reader goroutine owns one preallocated receive buffer and calls the
-// Handler inline. Concurrency comes from Options.Readers: with
+// Each reader goroutine owns preallocated receive buffers (Options.Batch of
+// them, for recvmmsg on Linux) and calls the Handler inline. Concurrency comes from Options.Readers: with
 // socket.Options.ReusePort each reader gets its own socket and the kernel
 // spreads flows across them; without it the readers share one socket. When
 // handlers fall behind, the kernel receive buffer fills and drops datagrams;
@@ -46,7 +46,9 @@ const MaxDatagram = 65000
 // limit on recvmmsg), so a configuration valid on Linux is valid anywhere.
 const maxBatch = 1024
 
-// Packet is one received datagram.
+// Packet is one received datagram. The *Packet itself is borrowed like
+// Data: the reader reuses it for the next datagram, so a Handler must not
+// keep the pointer; copy the fields it needs.
 type Packet struct {
 	// Data is borrowed: it is valid only until the Handler returns.
 	// Copy it (for example with buf.Pool.Copy) to keep it.
@@ -97,7 +99,10 @@ type Options struct {
 	// queued, so batching adds no latency. The handler still sees one
 	// datagram at a time, and Packet.Data stays valid only for that call.
 	// Default 8 on Linux, where the measured receive cost per queued
-	// datagram drops by about 44%; at most 1024. Batching only changes
+	// datagram drops by about 44%; at most 1024. When several readers share
+	// one socket (Readers > 1 without ReusePort) the default is 1: a batch
+	// would give one reader several datagrams to handle in turn while the
+	// others sit idle. An explicit value is used as given. Batching only changes
 	// performance, so where recvmmsg is unavailable (macOS, Windows) any
 	// Batch reads one datagram per call, and the same configuration runs
 	// on a development Mac and a Linux server (D-18). Conn.Batch reports
@@ -189,13 +194,8 @@ func Listen(ctx context.Context, network, address string, h Handler, o Options) 
 	if o.MaxPacket > MaxDatagram {
 		return nil, fmt.Errorf("udp: MaxPacket %d exceeds MaxDatagram %d", o.MaxPacket, MaxDatagram)
 	}
-	switch {
-	case o.Batch > maxBatch:
+	if o.Batch > maxBatch {
 		return nil, fmt.Errorf("udp: Batch %d exceeds %d", o.Batch, maxBatch)
-	case o.Batch == 0:
-		o.Batch = sys.DefaultBatch
-	case !sys.BatchSupported:
-		o.Batch = 1 // no recvmmsg: one datagram per call
 	}
 	if o.Readers == 0 {
 		o.Readers = 1
@@ -206,6 +206,17 @@ func Listen(ctx context.Context, network, address string, h Handler, o Options) 
 	nsock := 1
 	if o.Socket.ReusePort {
 		nsock = o.Readers
+	}
+	switch {
+	case !sys.BatchSupported:
+		o.Batch = 1 // no recvmmsg: one datagram per call
+	case o.Batch == 0 && o.Readers > nsock:
+		// Readers share a socket: a batch would hand several datagrams to
+		// one reader to handle in turn while the others wait on an empty
+		// queue, so by default each reader takes one.
+		o.Batch = 1
+	case o.Batch == 0:
+		o.Batch = sys.DefaultBatch
 	}
 	lc := socket.ListenConfig(o.Socket)
 	c := &Conn{handler: h, max: o.MaxPacket, batch: o.Batch, done: make(chan struct{}), closing: make(chan struct{}), dropsOn: true}

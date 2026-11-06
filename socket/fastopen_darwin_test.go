@@ -25,9 +25,7 @@ func TestFastOpenOnDarwin(t *testing.T) {
 	if gerr != nil || v == 0 {
 		t.Fatalf("TCP_FASTOPEN on the listener = %d, %v; want enabled", v, gerr)
 	}
-	// Dialing has no Fast Open on macOS (connectx); it runs without.
-	d := socket.Dialer(net.Dialer{}, opts)
-	c, err := d.DialContext(context.Background(), "tcp", ln.Addr().String())
+	c, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}

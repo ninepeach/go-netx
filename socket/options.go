@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -8,10 +9,15 @@ import (
 	"time"
 )
 
-// FastOpenOptions controls TCP Fast Open for listeners and outbound sockets.
-// Fast Open only saves a round trip, so where the platform or kernel lacks
-// it the socket is created without it (see Supported); any other error
-// from enabling it is returned. Backlog applies on Linux only.
+// FastOpenOptions controls TCP Fast Open on listeners. Server-side Fast
+// Open only saves a round trip, so where the platform or kernel lacks it
+// the listener is created without it (see Supported); any other error from
+// enabling it is returned. Backlog applies on Linux only.
+//
+// Dialers refuse it with UnsupportedOptionError (D-19): once a TFO cookie
+// is cached, a dial with Fast Open returns success without a handshake, so
+// a closed or dead peer looks connected until the first Read fails, and
+// the dial timeout and DialEvent no longer reflect reachability.
 type FastOpenOptions struct {
 	Enabled bool
 	Backlog int
@@ -113,8 +119,9 @@ func SetBuffers(c BufferSetter, opts Options) error {
 }
 
 // UnsupportedOptionError reports that a requested option is unavailable:
-// Platform is the operating system, or "network <name>" when the option
-// does not apply to that kind of socket.
+// Platform is the operating system, "network <name>" when the option does
+// not apply to that kind of socket, or "dialed connections" for Fast Open
+// on a Dialer.
 type UnsupportedOptionError struct {
 	Option   string
 	Platform string
@@ -137,10 +144,28 @@ func ListenConfig(opts Options) net.ListenConfig {
 	return net.ListenConfig{Control: control(opts, false), KeepAlive: keepAlive, KeepAliveConfig: keepAliveConfig}
 }
 
-// Dialer applies outbound socket options to base. The returned value is a copy;
-// the supplied dialer is not mutated.
+// Dialer applies outbound socket options to base. The returned value is a
+// copy; the supplied dialer is not mutated. A Control or ControlContext
+// already set on base keeps working: it runs first (ControlContext when
+// both are set, as in the net package), then the options are applied, all
+// through the returned dialer's ControlContext.
 func Dialer(base net.Dialer, opts Options) net.Dialer {
-	base.Control = control(opts, true)
+	ours := control(opts, true)
+	userCtx, userCtl := base.ControlContext, base.Control
+	base.Control = nil
+	base.ControlContext = func(ctx context.Context, network, address string, c syscall.RawConn) error {
+		var err error
+		switch {
+		case userCtx != nil:
+			err = userCtx(ctx, network, address, c)
+		case userCtl != nil:
+			err = userCtl(network, address, c)
+		}
+		if err != nil {
+			return err
+		}
+		return ours(network, address, c)
+	}
 	if !opts.KeepAlive.IsZero() {
 		base.KeepAlive, base.KeepAliveConfig = opts.KeepAlive.apply()
 	}
@@ -152,13 +177,16 @@ func control(opts Options, outbound bool) func(string, string, syscall.RawConn) 
 		if err := checkNetwork(network, opts); err != nil {
 			return err
 		}
+		if outbound && opts.FastOpen.Enabled {
+			return &UnsupportedOptionError{Option: "TCP Fast Open", Platform: "dialed connections"}
+		}
 		if opts == (Options{}) {
 			return nil
 		}
 		var applyErr error
 		if err := raw.Control(func(fd uintptr) {
 			if applyErr = applyBuffers(fd, opts); applyErr == nil {
-				applyErr = applyOptions(fd, opts, outbound)
+				applyErr = applyOptions(fd, opts)
 			}
 		}); err != nil {
 			return err

@@ -222,11 +222,28 @@ func (r *Reader) shrink() {
 	r.big, r.data = nil, r.idle
 }
 
+// maxEmptyReads is how many (0, nil) reads in a row readOnce accepts
+// before giving up with io.ErrNoProgress, as bufio does.
+const maxEmptyReads = 100
+
+// readOnce reads from the source once, retrying reads that return no data
+// and no error. A source that keeps doing so yields io.ErrNoProgress, which
+// is not sticky: a later call reads again.
 func (r *Reader) readOnce() error {
 	if r.err != nil {
 		return r.err
 	}
-	n, err := r.src.Read(r.data[r.w:])
+	var n int
+	var err error
+	for i := 0; ; i++ {
+		n, err = r.src.Read(r.data[r.w:])
+		if n != 0 || err != nil {
+			break
+		}
+		if i == maxEmptyReads-1 {
+			return io.ErrNoProgress
+		}
+	}
 	if n < 0 || n > len(r.data)-r.w {
 		r.err = errors.New("stream: invalid Read count from source")
 		return r.err

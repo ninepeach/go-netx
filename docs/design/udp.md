@@ -18,7 +18,7 @@ Imports: `socket`, `internal/sys`, `internal/backoff`, `internal/counter`.
 func Listen(ctx, network, address string, h Handler, o Options) (*Conn, error)
 type Handler func(c *Conn, p *Packet) // runs inline on the reader goroutine
 type Packet struct {
-    Data   []byte         // borrowed: valid until the handler returns
+    Data   []byte         // borrowed: valid until the handler returns (so is *Packet)
     From   netip.AddrPort // IPv4-mapped addresses unmapped
     Reader int            // reader index; flow-sticky with ReusePort
 }
@@ -57,7 +57,11 @@ handler is still called once per datagram, in arrival order, and
 `Packet.Data` points into that datagram's buffer, which is reused only on
 the next system call, after every handler of the batch has returned. Each
 slot has its own address and control buffer, so `From`, `Truncated` and
-`KernelDrops` work per datagram as with one read. `Batch: 1` keeps the
+`KernelDrops` work per datagram as with one read. When several readers
+share one socket (`Readers` > 1 without ReusePort) the default is 1
+(REG-21): a batch would give one reader several datagrams to handle in
+turn while the other readers wait on an empty queue, lowering handler
+parallelism; an explicit `Batch` is used as given. `Batch: 1` keeps the
 single `ReadMsgUDPAddrPort` loop. Batching only changes performance, so
 on platforms without `recvmmsg` (macOS, Windows) any `Batch` runs as 1 and
 the same configuration works on a development Mac (D-18); the bounds
@@ -139,7 +143,7 @@ options degrade where unavailable).
 
 ## 8. Testing
 
-UDP-01…UDP-37, SYS-05/06, OBS-03…OBS-05, NF-04/08/12 in
+UDP-01…UDP-38, SYS-05/06, OBS-03…OBS-05, NF-04/08/12 in
 [docs/TESTING.md](../TESTING.md). UDP-20 (IPv6) is written but has not
 run on an IPv6 host yet.
 
