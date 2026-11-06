@@ -41,13 +41,20 @@ func TestStressTableChurn(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, seed))
 			for time.Now().Before(deadline) {
 				k := r.IntN(10_000)
-				switch r.IntN(3) {
+				switch r.IntN(4) {
 				case 0:
 					if _, ok := tb.GetOrOpen(k, nil); ok {
 						created.Add(1)
 					}
 				case 1:
-					tb.Get(k)
+					tb.GetAndTouch(k) // traffic, racing Run's Sweep
+				case 3:
+					if f, ok := tb.Get(k); ok {
+						f.Touch()
+						if f.State() == Closed {
+							f.Touch() // must stay a no-op
+						}
+					}
 				case 2:
 					if f, ok := tb.Get(k); ok {
 						tb.Remove(k, f.ID())

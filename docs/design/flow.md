@@ -26,7 +26,8 @@ func (*Flow[V]) ID() uint64
 func (*Flow[V]) State() State           // Open, Closing, Closed
 func (*Flow[V]) BeginClose() bool       // Open → Closing, true once
 func (*Flow[V]) Close() bool            // → Closed, true exactly once
-func (*Flow[V]) LastSeen() int64
+func (*Flow[V]) Touch()                 // record activity; no effect unless Open and in its table
+func (*Flow[V]) LastSeen() int64        // last Touch, or creation time
 
 func NewTable[K comparable, V any](TableOptions[K, V]) *Table[K, V]
 type TableOptions[K comparable, V any] struct {
@@ -34,8 +35,9 @@ type TableOptions[K comparable, V any] struct {
     IdleTimeout time.Duration // 0 = no expiry
     OnClose     func(K, *Flow[V]) // exactly once per flow leaving the table
 }
-func (*Table) Get(K) (*Flow[V], bool)
-func (*Table) GetOrOpen(K, newValue func() V) (*Flow[V], bool)
+func (*Table) Get(K) (*Flow[V], bool)          // pure lookup, LastSeen unchanged
+func (*Table) GetAndTouch(K) (*Flow[V], bool)  // Get, then Touch: the per-packet path
+func (*Table) GetOrOpen(K, newValue func() V) (*Flow[V], bool) // new flow: LastSeen = table clock
 func (*Table) Remove(K, id uint64) bool // only if the ID still matches
 func (*Table) Sweep(now time.Time) int
 func (*Table) Run(context.Context) error // clock + sweeps; closes all on exit
@@ -72,21 +74,49 @@ had not yet reported are no longer in the table and are not reported.
 number of shards, each a mutex and a map, padded to its own cache line.
 A lookup locks one shard.
 
+**Lookup and activity are separate.** `Get` is a pure lookup and
+`GetOrOpen` changes `LastSeen` only by creating a flow (initialised to the
+table clock). `Touch` is the only operation that records activity:
+`LastSeen` is the last activity the system explicitly recorded, and
+`IdleTimeout` expires flows by it. The transport does not touch flows —
+it does not import `flow` — so the gateway calls `Touch` (or
+`GetAndTouch`) when the transport delivers real data. Background queries,
+`Range`, metrics and management code must not touch, or they would keep
+idle flows alive. There is no automatic heartbeat.
+
+**Touch cannot revive a leaving flow.** `LastSeen` and a frozen flag share
+one atomic word (the flag is the lowest bit; the clock is coarse anyway).
+`BeginClose`, `Close` and `Remove` set the flag, and `Sweep` evicts an idle
+flow by setting it with a CAS on the value it judged idle. `Touch` is a CAS
+loop that gives up when the flag is set. So a Touch that lands before
+Sweep decides makes Sweep's CAS fail and the flow stays; a Touch after the
+decision, or after Close or Remove, has no effect and `LastSeen` keeps its
+old value. A Closing or Closed flow still in the table is evicted by its
+old `LastSeen`. `Touch` never moves `LastSeen` backwards, and when the
+coarse clock has not moved since the last Touch — the common case per
+packet — it is a single atomic load.
+
 **Coarse clock.** Touches record the table's clock, not `time.Now()`, which
-would cost a call per packet. `Run` advances the clock every quarter of
+would cost a call per packet (a flow made by `New` outside a table uses
+`time.Now()`). `Run` advances the clock every quarter of
 `IdleTimeout` (clamped to 10ms…1s) and sweeps. `Sweep(now)` also advances
 the clock, so a table swept by hand without `Run` does not evict touched
 flows (REG-11); the clock never moves backwards.
 
-**Touch under the lock.** `Get` and `GetOrOpen` update `LastSeen` while
-holding the shard lock, so `Sweep` cannot evict a flow between lookup and
-touch (REG-15). A returned flow can still be closed later; callers that
-care check `State`.
+**Lookup races.** A returned flow can still be closed later by `Remove`,
+`Sweep` or `Close`; callers that care check `State`. Before v1.1 the
+touch happened inside `Get` under the shard lock so that `Sweep` could not
+evict a flow between lookup and touch (REG-15); the CAS above gives the
+same guarantee for a separate `Touch`: if Sweep wins, the Touch is a no-op
+and the flow is visibly not Open.
 
 ## 4. Performance (2 vCPU)
 
-- `Get` on `netip.AddrPort`: about 64–73ns at 1k flows, 243ns at 100k,
-  385ns at 1M (cache misses), 0 allocations.
+- `Get` on `netip.AddrPort` (a pure lookup): about 48ns at 1k flows, 80ns
+  at 100k, 112ns at 1M, 0 allocations; `GetAndTouch` on one key 51ns and
+  `GetOrOpen` on an existing key 50ns (medians of 5, 2 vCPU, measured with
+  the Touch change; `Get` used to store `LastSeen` on every call and was
+  52/69/112/210ns in the same run of the old code).
 - `Sweep` with nothing to evict: about 16ns per flow at 10k, 34ns at 100k,
   105ns at 1M; a million flows cost about 100ms per sweep, roughly 10% of a
   core at the 1s maximum tick.
@@ -96,9 +126,12 @@ care check `State`.
 D-06 (pending): sweep stays a full scan until a gateway approaches a
 million flows, then becomes incremental (a few shards per tick).
 
+D-20: `Get` is a pure lookup; `Touch` is the only operation that records
+activity.
+
 ## 6. Testing
 
-FLOW-01…FLOW-19, NF-05 (stress), NF-09 (fuzz), NF-14 in
+FLOW-01…FLOW-29, NF-05 (stress), NF-09 (fuzz), NF-14 in
 [docs/TESTING.md](../TESTING.md).
 
 ## 7. Open items

@@ -99,7 +99,7 @@ func BenchmarkGetAddrPort(b *testing.B) {
 	})
 }
 
-// GetOrOpen on an existing key: the per-packet path of a UDP gateway.
+// GetOrOpen on an existing key (a lookup, no Touch).
 // Checks: FLOW-16, NF-14
 func BenchmarkGetOrOpenExisting(b *testing.B) {
 	tb := NewTable(TableOptions[netip.AddrPort, int]{})
@@ -109,6 +109,21 @@ func BenchmarkGetOrOpenExisting(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			tb.GetOrOpen(key, nil)
+		}
+	})
+}
+
+// The per-packet path of a UDP gateway: look up the flow and record the
+// traffic.
+// Checks: FLOW-16, NF-14
+func BenchmarkGetAndTouch(b *testing.B) {
+	tb := NewTable(TableOptions[netip.AddrPort, int]{})
+	key := netip.MustParseAddrPort("10.0.0.1:5000")
+	tb.GetOrOpen(key, nil)
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			tb.GetAndTouch(key)
 		}
 	})
 }
@@ -129,7 +144,7 @@ func TestActiveFlowSurvivesSweep(t *testing.T) {
 	tb.GetOrOpen(2, nil) // never touched again: must be evicted
 	deadline := time.Now().Add(300 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if _, ok := tb.Get(1); !ok {
+		if _, ok := tb.GetAndTouch(1); !ok { // traffic on flow 1
 			t.Fatal("active flow evicted")
 		}
 		time.Sleep(time.Millisecond)
@@ -152,7 +167,7 @@ func TestManualSweepKeepsTouchedFlow(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 5; i++ {
 		now = now.Add(600 * time.Millisecond) // 3s total, beyond IdleTimeout
-		tb.Get(1)                             // touched every interval
+		tb.GetAndTouch(1)                     // traffic every interval
 		if tb.Sweep(now) != 0 {
 			t.Fatalf("touched flow evicted at step %d", i)
 		}
@@ -212,7 +227,7 @@ func TestSweepClockNeverMovesBackward(t *testing.T) {
 	if got := tb.Sweep(future); got != 0 {
 		t.Fatalf("first sweep evicted fresh flow: %d", got)
 	}
-	tb.Get(1) // touch at the advanced table clock
+	tb.GetAndTouch(1) // touch at the advanced table clock
 	if got := tb.Sweep(future.Add(-5 * time.Second)); got != 0 {
 		t.Fatalf("stale sweep evicted flow: %d", got)
 	}
