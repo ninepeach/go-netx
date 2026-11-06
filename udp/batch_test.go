@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ninepeach/go-netx/socket"
 	"github.com/ninepeach/go-netx/udp"
 )
 
@@ -146,6 +147,38 @@ func TestBatchOptionBoundaries(t *testing.T) {
 	}
 	if err := listen(udp.Options{Batch: 1025}); err == nil || !strings.Contains(err.Error(), "exceeds 1024") {
 		t.Fatalf("Batch 1025: %v", err)
+	}
+}
+
+// Checks: UDP-38
+func TestBatchDefaultWhenReadersShareASocket(t *testing.T) {
+	cases := []struct {
+		o    udp.Options
+		want int
+	}{
+		{udp.Options{Readers: 4}, 1},                                          // shared socket
+		{udp.Options{Readers: 4, Batch: 8}, 8},                                // explicit value kept
+		{udp.Options{Readers: 1}, 8},                                          // one reader, own socket
+		{udp.Options{Readers: 2, Socket: socket.Options{ReusePort: true}}, 8}, // one socket per reader
+	}
+	for _, tc := range cases {
+		if tc.o.Socket.ReusePort && !socket.Supported().ReusePortBalanced && runtime.GOOS != "darwin" {
+			continue // ReusePort is refused on this platform (SOCK-04)
+		}
+		want := tc.want
+		if runtime.GOOS != "linux" {
+			want = 1 // no recvmmsg
+		}
+		c := start(t, echo, tc.o)
+		if got := c.Batch(); got != want {
+			t.Fatalf("%+v on %s: Batch() = %d, want %d", tc.o, runtime.GOOS, got, want)
+		}
+		cl := dial(t, c) // and it serves
+		in := make([]byte, 8)
+		cl.Write([]byte("ping"))
+		if n, err := cl.Read(in); err != nil || string(in[:n]) != "ping" {
+			t.Fatalf("%+v: echo %q, %v", tc.o, in[:n], err)
+		}
 	}
 }
 
