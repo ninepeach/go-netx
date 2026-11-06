@@ -56,7 +56,8 @@ kernel doubles it for bookkeeping). If it is short, Linux retries once with
 if the size is still short, the socket is not created and the caller gets
 `*BufferSizeError{Option, Requested, Actual}` with a hint (raise the
 sysctl, or grant the capability). `SetBuffers` verifies the same way when
-the connection exposes `SyscallConn`. A gateway that sizes buffers for its
+the connection exposes `SyscallConn`, and returns an error for a nil or
+typed-nil connection instead of panicking (REG-24). A gateway that sizes buffers for its
 peak load learns at startup that the host is not configured for it,
 instead of discovering it later as kernel drops. The logic is one function
 over injected set/get calls, so the same code is tested on every platform.
@@ -120,7 +121,7 @@ across sockets.
 
 ## 6. Testing
 
-SOCK-01…SOCK-29 in [docs/TESTING.md](../TESTING.md). Platform-specific
+SOCK-01…SOCK-30 in [docs/TESTING.md](../TESTING.md). Platform-specific
 options are verified with `getsockopt` and real bind attempts. SOCK-24/25
 run on the real Linux kernel; run as root and again under
 `setpriv --bounding-set -net_admin` they cover both the FORCE success and

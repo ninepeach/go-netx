@@ -2,6 +2,7 @@ package stream
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/ninepeach/go-netx/buf"
@@ -16,6 +17,7 @@ import (
 func FuzzReader(f *testing.F) {
 	f.Add([]byte("hello, stream"), []byte{3, 1, 9}, []byte{0, 5, 1, 2, 3, 2, 0, 40})
 	f.Add(bytes.Repeat([]byte{7}, 5000), []byte{200, 1, 255}, []byte{0, 255, 1, 255, 0, 30})
+	f.Add([]byte("negative counts"), []byte{1}, []byte{0, 1, 4, 0, 5, 0, 5, 255, 4, 255, 3, 2, 0, 1})
 	f.Fuzz(readerModel)
 }
 
@@ -43,7 +45,7 @@ func readerModel(t *testing.T, data, cuts, ops []byte) {
 	p := make([]byte, 200)
 	for i := 0; i+1 < len(ops); i += 2 {
 		arg := int(ops[i+1]) * 33
-		switch ops[i] % 4 {
+		switch ops[i] % 6 {
 		case 0: // Peek arg bytes and consume them
 			got, err := r.Peek(arg)
 			if err == nil && len(got) != arg {
@@ -63,6 +65,16 @@ func readerModel(t *testing.T, data, cuts, ops []byte) {
 			k := min(arg%50, len(b))
 			take(b[:k])
 			r.Discard(k)
+		case 4: // negative Peek: an error, nothing changes
+			n := r.Len()
+			if got, err := r.Peek(-arg - 1); !errors.Is(err, ErrNegativeCount) || got != nil || r.Len() != n {
+				t.Fatalf("Peek(%d) = %d bytes, %v; Len %d -> %d", -arg-1, len(got), err, n, r.Len())
+			}
+		case 5: // non-positive Discard consumes nothing
+			n := r.Len()
+			if got := r.Discard(-arg); got != 0 || r.Len() != n {
+				t.Fatalf("Discard(%d) = %d; Len %d -> %d", -arg, got, n, r.Len())
+			}
 		}
 		if r.Len() > 8192 {
 			t.Fatalf("buffered %d > Max", r.Len())

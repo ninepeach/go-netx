@@ -99,10 +99,11 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-23 | P1 | 不足时（仅 Linux）用 FORCE 选项重试一次，FORCE 自身的错误被忽略，以重试后读回的值为准；足够时不重试；setsockopt、getsockopt 的错误原样返回 | ✅ | `socket.EnsureBufferTriesForceOnce` | 所有平台运行 |
 | SOCK-24 | P0 | Linux 真实内核：请求值不超过 rmem_max/wmem_max 时成功；超过时，有 CAP_NET_ADMIN 则拿到完整大小，没有则返回 `BufferSizeError`，Actual 等于上限 | ✅ | `socket.BufferCapOnLinux` | 运行时检测权限，分别断言两种结果；已用 root 和 `setpriv --bounding-set -net_admin` 各跑一次 |
 | SOCK-25 | P1 | `SetBuffers` 作用于已有连接时同样校验 | ✅ | `socket.BufferCapOnLinux` | 仅 Linux |
-| SOCK-26 | P1 | macOS：FastOpen 在监听 socket 上设置 `TCP_FASTOPEN` | ⚠️ | `socket.FastOpenOnDarwin` | 测试已写好，只在 macOS 上运行；当前开发环境只做了编译验证 |
+| SOCK-26 | P1 | macOS：内核开启服务端 Fast Open（`net.inet.tcp.fastopen` 含 2）时监听 socket 上 `TCP_FASTOPEN` 生效；关闭时监听照常工作 | ⚠️ | `socket.FastOpenOnDarwin` | 测试已写好，只在 macOS 上运行；当前开发环境只做了编译验证 |
 | SOCK-27 | P1 | `socket.Supported()` 如实报告当前平台实现了哪些性能选项（Linux、macOS、FreeBSD、其他） | ✅ | `socket.SupportedMatchesPlatform` | 所有平台运行 |
 | SOCK-28 | P0 | `socket.Dialer` 设置了 FastOpen 时拨号报 `UnsupportedOptionError`：拨出方向的 FastOpen 会让已关闭的对端看起来连接成功（D-19） | ✅ | `socket.DialerRefusesFastOpen` |  |
 | SOCK-29 | P0 | `socket.Dialer` 保留调用方的 `Control` 和 `ControlContext`，先执行调用方的，再应用 go-netx 的选项；base 设置了 `ControlContext` 时选项照样生效 | ✅ | `socket.DialerKeepsCallerControl` |  |
+| SOCK-30 | P1 | `SetBuffers` 收到 nil 或 typed nil 连接时返回错误，不 panic，也不假装成功 | ✅ | `socket.SetBuffersRejectsNil` |  |
 
 ## 3. tcp：TCP 传输
 
@@ -328,6 +329,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | STREAM-07 | P1 | `Release` 归还所有缓冲区，之后的调用返回错误；选项非法时构造函数 panic | ✅ | `stream.ReleaseAndOptions` |  |
 | STREAM-08 | P2 | 大量空闲连接下，每个连接的缓冲区开销（压测中实测，并与固定 4KB 缓冲区对比） | ✅ | `stream.StressIdleReaderMemory` | 实测（4000 个空闲连接）：每个连接比固定 4KB 的 bufio.Reader 少约 3.6KB，比不用缓冲区多约 430 字节 |
 | STREAM-16 | P1 | 数据源连续多次返回 `(0, nil)` 时，`Peek`、`Fill`、`Read` 返回 `io.ErrNoProgress`，不空转 | ✅ | `stream.EmptyReadsDoNotSpin` |  |
+| STREAM-17 | P0 | 负数参数：`Peek(n<0)` 返回 `ErrNegativeCount`，`Discard(n<=0)` 返回 0；两者都不改变内部状态，之后的调用照常工作 | ✅ | `stream.NegativeCounts` | Fuzz 覆盖负数参数 |
 
 ### 8.5.2 Writer
 
@@ -421,6 +423,9 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | REG-20 | socket | `socket.Dialer` 覆盖调用方的 `Control`；base 设置了 `ControlContext` 时，net 包忽略 `Control`，所有 socket 选项被静默跳过 | SOCK-29 | ✅ |
 | REG-21 | udp | 多个 reader 共用一个 socket 时，默认 Batch 8 让一个 reader 一次取走多个包串行处理，其他 reader 空闲，并行度下降 | UDP-38 | ✅ |
 | REG-22 | stream | 数据源一直返回 `(0, nil)` 时 `Peek` 死循环（实测 300ms 空转 8100 万次） | STREAM-16 | ✅ |
+| REG-23 | stream | `Peek(-1)` 切片越界 panic；`Discard(-1)` 让读位置倒退，之后 `Buffered()` panic | STREAM-17 | ✅ |
+| REG-24 | socket | `SetBuffers(nil, …)` 在缓冲区为 0 时返回 nil，大于 0 时 panic；typed nil 连接同样 panic | SOCK-30 | ✅ |
+| REG-25 | socket | macOS FastOpen 测试无条件要求 `TCP_FASTOPEN` 非零，内核关闭 Fast Open 时，即使降级行为正确也会失败 | SOCK-26 | ✅ |
 
 ### 设计决定
 

@@ -29,6 +29,8 @@ var (
 	ErrNoBuffer = errors.New("stream: no buffer within budget")
 	// ErrReleased is returned by a Reader after Release.
 	ErrReleased = errors.New("stream: reader released")
+	// ErrNegativeCount is returned by Peek for a negative count.
+	ErrNegativeCount = errors.New("stream: negative count")
 )
 
 // ReaderOptions configures a Reader.
@@ -82,10 +84,14 @@ func (r *Reader) Len() int { return r.w - r.r }
 // Peek returns the next n bytes without consuming them, reading from the
 // source as needed. The slice is borrowed: valid until the next call that
 // reads, discards or releases. If fewer than n bytes can be had, Peek
-// returns what is buffered and the error that stopped it.
+// returns what is buffered and the error that stopped it. A negative n
+// returns ErrNegativeCount and changes nothing.
 func (r *Reader) Peek(n int) ([]byte, error) {
 	if r.done {
 		return nil, ErrReleased
+	}
+	if n < 0 {
+		return nil, ErrNegativeCount
 	}
 	if n > r.max {
 		return r.Buffered(), ErrTooLarge
@@ -119,8 +125,11 @@ func (r *Reader) Fill() error {
 
 // Discard consumes n buffered bytes (fewer if fewer are buffered) and
 // returns how many it consumed. When the buffer empties after a light read,
-// a grown buffer goes back to the pool.
+// a grown buffer goes back to the pool. n <= 0 consumes nothing.
 func (r *Reader) Discard(n int) int {
+	if n <= 0 {
+		return 0
+	}
 	if n > r.Len() {
 		n = r.Len()
 	}

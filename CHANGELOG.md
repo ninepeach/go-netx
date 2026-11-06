@@ -35,6 +35,12 @@
 
 ### Changed
 
+- stream: `Reader.Peek` with a negative count returns the new
+  `ErrNegativeCount` instead of panicking, and `Discard` with a count of 0
+  or less consumes nothing; before, a negative `Discard` moved the read
+  position backwards and corrupted the Reader.
+- socket: `SetBuffers` returns an error for a nil or typed-nil connection
+  instead of panicking (or, with no sizes, reporting success).
 - socket: `Dialer` refuses `FastOpen` with `UnsupportedOptionError`
   (D-19). With a cached TFO cookie a Fast Open dial to a closed port
   succeeded and the error appeared only at Read, so dial timeouts and

@@ -161,3 +161,23 @@ func TestDialerKeepsCallerControl(t *testing.T) {
 	}
 	c.Close()
 }
+
+// Checks: SOCK-30
+func TestSetBuffersRejectsNil(t *testing.T) {
+	var typed *net.UDPConn
+	for name, c := range map[string]socket.BufferSetter{"nil": nil, "typed nil": typed} {
+		for _, opts := range []socket.Options{{}, {RecvBuffer: 4096}, {SendBuffer: 4096}} {
+			if err := socket.SetBuffers(c, opts); err == nil {
+				t.Fatalf("SetBuffers(%s, %+v) = nil, want an error", name, opts)
+			}
+		}
+	}
+	c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := socket.SetBuffers(c, socket.Options{RecvBuffer: 4096}); err != nil {
+		t.Fatalf("real connection: %v", err)
+	}
+}
