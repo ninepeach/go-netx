@@ -229,7 +229,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | FLOW-11 | P1 | 传入更早的时间时时钟不会倒退 | ✅ | `flow.SweepClockNeverMovesBackward` |  |
 | FLOW-12 | P1 | 多个 Sweep 并发执行时不会重复调用 `OnClose` | ✅ | `flow.ConcurrentRemovalClosesFlowOnce`<br>`flow.ConcurrentSweepsCloseOnce` |  |
 | FLOW-13 | P1 | Run 退出时关闭所有 flow | ✅ | `flow.RunClosesAllOnExit` |  |
-| FLOW-14 | P2 | 大量 flow 下 Sweep 的耗时 | ✅ | `flow.BenchmarkSweepBySize` | 实测（2 vCPU）：1 万 flow 约 0.16ms，10 万约 3.4ms，100 万约 105ms；单个 flow 的成本随规模上升，原因是缓存未命中 |
+| FLOW-14 | P2 | 大量 flow 下 Sweep 的耗时 | ✅ | `flow.BenchmarkSweepBySize` | 实测（2 vCPU）：1 万 flow 约 0.1ms，10 万约 1.4ms，两者多次运行稳定；100 万时表超出 CPU 缓存，结果随机器变化很大：2026-11-06 在一台 VM 上多次运行为 19～50ms，2026-11-05 在另一台 VM 上为 105ms。单个 flow 的成本随规模上升，原因是缓存未命中 |
 | FLOW-15 | P2 | 不同 key 哈希冲突时不会被合并 | ➖ |  | 用的是 Go map，key 按值比较，哈希只用来选分片 |
 | FLOW-16 | P2 | 查找零分配 | ✅ | `flow.BenchmarkGetAddrPort`<br>`flow.BenchmarkGetAndTouch`<br>`flow.BenchmarkGetOrOpenExisting` |  |
 | FLOW-17 | P1 | 调用方先 `Flow.Close()`，再经 Remove、Sweep 或 Table.Close 离开表，`OnClose` 仍恰好调用一次 | ✅ | `flow.OnCloseRunsForFlowsClosedByTheCaller` |  |
@@ -457,7 +457,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-03 | UDP handler 没有 ctx，也不能被中断 | 换取零分配、无额外 goroutine；需要等待的工作交给 Gateway 的队列 |
 | D-04 | `Concurrency.TryAcquire` 不阻塞 | Admission 只回答“现在能不能进”，排队属于 queue 的职责 |
 | D-05 | Buf 的预算只统计正在使用的内存 | sync.Pool 中闲置的内存会被 GC 回收，无法也不需要计入 |
-| D-06 | 暂不把 Sweep 改为增量式（待定） | 100 万个 flow 每次 Sweep 约 105ms，按 1 秒一次约占一个核 10%。目前各 Gateway 的规模远小于此，改为增量会增加复杂度；flow 数量接近百万时再改为每次只扫一部分分片 |
+| D-06 | 暂不把 Sweep 改为增量式（待定） | 100 万个 flow 每次 Sweep 实测 19～105ms（随机器不同，见 FLOW-14），按 1 秒一次约占一个核 2%～10%，按上限估算。目前各 Gateway 的规模远小于此，改为增量会增加复杂度；flow 数量接近百万时再改为每次只扫一部分分片 |
 | D-07 | TCP 不使用 worker 池复用 goroutine | worker 池是 fasthttp 针对 Web 应用大量短连接的优化；go-netx 面向长连接，新连接很少。实测每个连接只能省约 3µs（新开 goroutine 约 3.5～4.2µs 并有 1 次分配，复用约 0.6µs），约占一次 accept（79µs）的 4%，抵不过管理空闲 worker 增加的复杂度。只有当某个 Gateway 需要处理每秒数万个短连接时，才用该场景的 Benchmark 重新评估 |
 | D-08 | 拒绝连接时不回复协议层消息（不像 fasthttp 回 503） | 传输层不理解协议；需要先回复再关闭的 Gateway 自行在准入逻辑中处理 |
 | D-09 | 不提供每连接独立的 context（不像 net/http 的 ConnContext） | 每个连接要多一次分配，而 Gateway 很少需要；共享的值来自 Serve 的 ctx，连接身份用 `Conn.ID()` |
@@ -572,7 +572,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 - [ ] 按核数分配的内存可以预先分配，按连接数分配的内存要用池，绝不按包分配。
 - [ ] 共享计数器按 cache line 对齐，或者按读者分片，避免伪共享。
 - [ ] 全表扫描的成本随规模增长，而且超出 CPU 缓存后会更快地上升，要用 Benchmark 测出不同规模下的数字（FLOW-14）。
-- [ ] 文档中的性能数字必须来自实测，不能估算。go-netx 曾两次犯这个错误：把 Sweep 的成本写成每百万约 20ms（实测约 105ms），把新开 goroutine 的开销写成“微秒以下”（实测约 3.5～4.2µs）。
+- [ ] 文档中的性能数字必须来自实测，不能估算。go-netx 曾两次犯这个错误：把 Sweep 的成本写成每百万约 20ms（当时实测约 105ms；后来在另一台机器上实测 19～50ms，可见这类数字还要写明机器和波动范围），把新开 goroutine 的开销写成“微秒以下”（实测约 3.5～4.2µs）。
 
 ## 15. 测试执行分层
 

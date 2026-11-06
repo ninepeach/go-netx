@@ -185,9 +185,10 @@ func (s *shard[K, V]) rangeLocked(fn func(K, *Flow[V]) bool) bool {
 //
 // Sweep visits every flow, holding one shard lock at a time. Cost grows
 // with table size, and faster than linearly once the table outgrows the
-// CPU caches: about 0.2ms for 10k flows and about 100ms for 1M flows
-// (2 vCPU). With Run's 1s maximum tick, a million flows cost roughly 10%
-// of one core. See BenchmarkSweepBySize.
+// CPU caches: about 0.1ms for 10k flows and 1.4ms for 100k; at 1M it
+// depends heavily on the machine's memory, 19-50ms on one 2 vCPU VM and
+// 105ms on another. With Run's 1s maximum tick, a million flows cost about
+// 2-10% of one core. See BenchmarkSweepBySize.
 func (t *Table[K, V]) Sweep(now time.Time) int {
 	t.advance(now.UnixNano())
 	if t.idle <= 0 {
