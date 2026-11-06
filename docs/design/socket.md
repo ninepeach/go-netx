@@ -16,7 +16,7 @@ Overall design: [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 ```go
 type Options struct {
-    FastOpen   FastOpenOptions // TCP only; runs without it where unavailable
+    FastOpen   FastOpenOptions // TCP listeners only; runs without it where unavailable
     ReusePort  bool            // Linux, macOS, FreeBSD
     RecvBuffer, SendBuffer int // SO_RCVBUF / SO_SNDBUF when > 0; verified
     KeepAlive  KeepAlive       // Disable, Idle, Interval, Count; zero = Go default
@@ -26,7 +26,7 @@ func ListenConfig(Options) net.ListenConfig
 func Dialer(base net.Dialer, Options) net.Dialer // returns a copy
 func SetBuffers(BufferSetter, Options) error     // for sockets made elsewhere
 func IsUnsupported(error) bool                   // *UnsupportedOptionError
-func Supported() Capabilities                    // FastOpenListen, FastOpenDial, ReusePortBalanced
+func Supported() Capabilities                    // FastOpenListen, ReusePortBalanced
 type BufferSizeError struct{ Option string; Requested, Actual int }
 ```
 
@@ -37,6 +37,14 @@ type BufferSizeError struct{ Option string; Requested, Actual int }
 That is what makes them work: a TCP listener's buffer sizes and keep-alive
 are inherited by accepted connections (no per-connection syscalls), and
 TCP window scaling is negotiated with the larger buffer already in place.
+
+**The caller's hooks keep working (REG-20).** `Dialer(base, opts)` runs the
+hook already on `base` first — `ControlContext`, or `Control` when only
+that is set, matching the net package, which ignores `Control` when
+`ControlContext` is set — and then applies the options, all through the
+returned dialer's `ControlContext`. Replacing `Control` would have dropped
+the caller's hook, and with a `ControlContext` on `base` every option
+would have been skipped silently.
 
 **Buffer sizes are verified (D-16).** Kernels cap `SO_RCVBUF` and
 `SO_SNDBUF` without failing setsockopt: Linux silently limits them to
@@ -71,7 +79,16 @@ on non-TCP/UDP networks, TCP-only options on UDP (D-14), and ReusePort
 where a second bind would fail. There is no caller-chosen ignore policy
 (D-13). Where the platform can do it, the option is implemented rather
 than skipped: macOS listeners get Fast Open through `TCP_FASTOPEN`
-(0x105); dialing has none there because it needs `connectx()`.
+(0x105).
+
+**No Fast Open on dialers (D-19, REG-19).** Measured on Linux: after a TFO
+cookie is cached, a Fast Open dial to a port that is no longer listening
+returns success in about 100µs without a handshake, the first Write
+succeeds too, and the failure appears only at Read. The dial timeout and
+`tcp.DialEvent` then say nothing about reachability, and a gateway would
+treat a dead upstream as up. That changes behaviour, so a Dialer with
+`FastOpen.Enabled` returns `*UnsupportedOptionError` with `Platform`
+`"dialed connections"` on every platform; listeners keep Fast Open.
 
 **ReusePort.** Linux uses `SO_REUSEPORT`; FreeBSD uses
 `SO_REUSEPORT_LB` to distribute connections and datagrams. macOS accepts
@@ -85,13 +102,14 @@ across sockets.
 | RecvBuffer / SendBuffer | ✓ verified; reading halved (kernel doubles); FORCE retry when capped | ✓ verified (cap: `kern.ipc.maxsockbuf`) | ✓ verified | ✓ verified |
 | KeepAlive idle/interval/count | ✓ | ✓ | ✓ | ✓ |
 | ReusePort | ✓ | ✓ (bind only) | ✓ (load-balanced) | unsupported error |
-| FastOpen | ✓ listen and dial (kernel may disable: runs without) | listen ✓ (`TCP_FASTOPEN`); dial runs without | runs without | runs without |
+| FastOpen (listeners; dialers refuse it everywhere) | ✓ (kernel may disable: runs without) | ✓ (`TCP_FASTOPEN`) | runs without | runs without |
 
 ## 5. Decisions
 
 - One `Options` struct shared by TCP and UDP, so a gateway configures
   sockets the same way everywhere.
 - D-18: performance options degrade where unavailable; behaviour options fail.
+- D-19: no Fast Open on dialers.
 - macOS ReusePort is accepted for configuration parity, but callers must
   not assume load balancing; use Linux or FreeBSD when per-socket load
   distribution is required.
@@ -102,7 +120,7 @@ across sockets.
 
 ## 6. Testing
 
-SOCK-01…SOCK-27 in [docs/TESTING.md](../TESTING.md). Platform-specific
+SOCK-01…SOCK-29 in [docs/TESTING.md](../TESTING.md). Platform-specific
 options are verified with `getsockopt` and real bind attempts. SOCK-24/25
 run on the real Linux kernel; run as root and again under
 `setpriv --bounding-set -net_admin` they cover both the FORCE success and

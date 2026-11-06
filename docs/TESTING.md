@@ -99,10 +99,10 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | SOCK-23 | P1 | 不足时（仅 Linux）用 FORCE 选项重试一次，FORCE 自身的错误被忽略，以重试后读回的值为准；足够时不重试；setsockopt、getsockopt 的错误原样返回 | ✅ | `socket.EnsureBufferTriesForceOnce` | 所有平台运行 |
 | SOCK-24 | P0 | Linux 真实内核：请求值不超过 rmem_max/wmem_max 时成功；超过时，有 CAP_NET_ADMIN 则拿到完整大小，没有则返回 `BufferSizeError`，Actual 等于上限 | ✅ | `socket.BufferCapOnLinux` | 运行时检测权限，分别断言两种结果；已用 root 和 `setpriv --bounding-set -net_admin` 各跑一次 |
 | SOCK-25 | P1 | `SetBuffers` 作用于已有连接时同样校验 | ✅ | `socket.BufferCapOnLinux` | 仅 Linux |
-| SOCK-26 | P1 | macOS：FastOpen 在监听 socket 上设置 `TCP_FASTOPEN`；拨出方向不带 FastOpen 照常连接 | ⚠️ | `socket.FastOpenOnDarwin` | 测试已写好，只在 macOS 上运行；当前开发环境只做了编译验证 |
+| SOCK-26 | P1 | macOS：FastOpen 在监听 socket 上设置 `TCP_FASTOPEN` | ⚠️ | `socket.FastOpenOnDarwin` | 测试已写好，只在 macOS 上运行；当前开发环境只做了编译验证 |
 | SOCK-27 | P1 | `socket.Supported()` 如实报告当前平台实现了哪些性能选项（Linux、macOS、FreeBSD、其他） | ✅ | `socket.SupportedMatchesPlatform` | 所有平台运行 |
-| SOCK-28 | P0 | `socket.Dialer` 设置了 FastOpen 时拨号报 `UnsupportedOptionError`：拨出方向的 FastOpen 会让已关闭的对端看起来连接成功（D-19） | 🔧 |  |  |
-| SOCK-29 | P0 | `socket.Dialer` 保留调用方的 `Control` 和 `ControlContext`，先执行调用方的，再应用 go-netx 的选项；base 设置了 `ControlContext` 时选项照样生效 | 🔧 |  |  |
+| SOCK-28 | P0 | `socket.Dialer` 设置了 FastOpen 时拨号报 `UnsupportedOptionError`：拨出方向的 FastOpen 会让已关闭的对端看起来连接成功（D-19） | ✅ | `socket.DialerRefusesFastOpen` |  |
+| SOCK-29 | P0 | `socket.Dialer` 保留调用方的 `Control` 和 `ControlContext`，先执行调用方的，再应用 go-netx 的选项；base 设置了 `ControlContext` 时选项照样生效 | ✅ | `socket.DialerKeepsCallerControl` |  |
 
 ## 3. tcp：TCP 传输
 
@@ -183,7 +183,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | UDP-35 | P1 | 一批中间夹着超过 `MaxPacket` 的数据报时，只丢弃并计数这一个，前后的照常交付 | ✅ | `udp.TruncatedInsideBurst` |  |
 | UDP-36 | P1 | 批量读取时内核丢包计数仍然生效 | ✅ | `udp.KernelDropsCountedWithBatch` | 仅 Linux |
 | UDP-37 | P1 | `Conn.Batch()` 返回实际生效的批量：Linux 上为设置值或默认 8；没有 recvmmsg 的平台上任何设置都为 1，且照常收发 | ✅ | `udp.BatchInEffect` | 按平台分别断言 |
-| UDP-38 | P1 | 多个 reader 共用一个 socket（`Readers` > 1 且未开 ReusePort）时，`Batch` 默认取 1，显式设置的值照用 | 🔧 |  |  |
+| UDP-38 | P1 | 多个 reader 共用一个 socket（`Readers` > 1 且未开 ReusePort）时，`Batch` 默认取 1，显式设置的值照用 | ✅ | `udp.BatchDefaultWhenReadersShareASocket` |  |
 
 ### 4.2 发送与 Reply
 
@@ -327,7 +327,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | STREAM-06 | P1 | 底层读错误（包括 EOF）正确传递，已缓冲的数据先交给调用方 | ✅ | `stream.SourceErrorsAfterData` |  |
 | STREAM-07 | P1 | `Release` 归还所有缓冲区，之后的调用返回错误；选项非法时构造函数 panic | ✅ | `stream.ReleaseAndOptions` |  |
 | STREAM-08 | P2 | 大量空闲连接下，每个连接的缓冲区开销（压测中实测，并与固定 4KB 缓冲区对比） | ✅ | `stream.StressIdleReaderMemory` | 实测（4000 个空闲连接）：每个连接比固定 4KB 的 bufio.Reader 少约 3.6KB，比不用缓冲区多约 430 字节 |
-| STREAM-16 | P1 | 数据源连续多次返回 `(0, nil)` 时，`Peek`、`Fill`、`Read` 返回 `io.ErrNoProgress`，不空转 | 🔧 |  |  |
+| STREAM-16 | P1 | 数据源连续多次返回 `(0, nil)` 时，`Peek`、`Fill`、`Read` 返回 `io.ErrNoProgress`，不空转 | ✅ | `stream.EmptyReadsDoNotSpin` |  |
 
 ### 8.5.2 Writer
 
@@ -417,10 +417,10 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | REG-16 | udp | 永久读错误会无限重试 | UDP-11 | ✅ |
 | REG-17 | tcp | 永久 accept 错误时，等待长连接 handler 导致无法退出 | TCP-06 | ✅ |
 | REG-18 | udp | `KernelDrops` 在 32 位回绕后停止增长 | UDP-28 | ✅ |
-| REG-19 | socket | Dialer 开启 FastOpen 后，拿到 TFO cookie 的对端即使已关闭，Dial 也返回成功，错误到 Read 才出现；Dial 超时和 `DialEvent` 失效 | SOCK-28 | 🔧 |
-| REG-20 | socket | `socket.Dialer` 覆盖调用方的 `Control`；base 设置了 `ControlContext` 时，net 包忽略 `Control`，所有 socket 选项被静默跳过 | SOCK-29 | 🔧 |
-| REG-21 | udp | 多个 reader 共用一个 socket 时，默认 Batch 8 让一个 reader 一次取走多个包串行处理，其他 reader 空闲，并行度下降 | UDP-38 | 🔧 |
-| REG-22 | stream | 数据源一直返回 `(0, nil)` 时 `Peek` 死循环（实测 300ms 空转 8100 万次） | STREAM-16 | 🔧 |
+| REG-19 | socket | Dialer 开启 FastOpen 后，拿到 TFO cookie 的对端即使已关闭，Dial 也返回成功，错误到 Read 才出现；Dial 超时和 `DialEvent` 失效 | SOCK-28 | ✅ |
+| REG-20 | socket | `socket.Dialer` 覆盖调用方的 `Control`；base 设置了 `ControlContext` 时，net 包忽略 `Control`，所有 socket 选项被静默跳过 | SOCK-29 | ✅ |
+| REG-21 | udp | 多个 reader 共用一个 socket 时，默认 Batch 8 让一个 reader 一次取走多个包串行处理，其他 reader 空闲，并行度下降 | UDP-38 | ✅ |
+| REG-22 | stream | 数据源一直返回 `(0, nil)` 时 `Peek` 死循环（实测 300ms 空转 8100 万次） | STREAM-16 | ✅ |
 
 ### 设计决定
 
@@ -445,7 +445,8 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-15 | macOS 支持 ReusePort，FreeBSD 使用 `SO_REUSEPORT_LB` | macOS 允许多个 socket 绑定同一端口，但不分流，只有一个能收到数据；支持它是为了让同一份配置能在 Mac 开发机上运行，文档中写明不分流。FreeBSD 的 `SO_REUSEPORT_LB` 与 Linux 一样分流 |
 | D-16 | 缓冲区小于请求值时报错，不只报告 | 内核截断缓冲区时不报错（Linux 截到 rmem_max），网关会带着比设计小的缓冲区运行，直到高峰期丢包才发现。启动时报错，并提示调大 sysctl 或授予 CAP_NET_ADMIN，与“不静默忽略”的原则一致。代价：默认配置的机器上，请求大缓冲区会启动失败 |
 | D-17 | Linux 上默认用 recvmmsg 批量读取（`Batch` 默认 8） | 实测有积压时每个数据报的接收开销降低约 44%，且不增加延迟（不等凑满）。代价是每个 reader 的内存变为 Batch × MaxPacket，默认约 520KB；小包网关应设置 MaxPacket。32 比 8 提升很小但内存翻 4 倍，所以默认取 8 |
-| D-18 | 只影响性能的选项在平台做不到时照常运行，影响行为的选项做不到时报错 | 要求同一份配置在 Mac 开发机和 Linux 上都能运行。FastOpen（省一个往返）、`Batch`（每次系统调用收几个包）、macOS 上的 ReusePort（能绑定但不分流）只影响性能，做不到时按普通方式运行，并由 `socket.Supported()`、`udp.Conn.Batch()` 报告实际情况；能做到的平台尽量真实现（macOS 监听端 FastOpen）。不适用于当前网络类型的选项（D-14）、达不到请求大小的缓冲区（D-16）、其他平台上的 ReusePort（第二次绑定会失败）会改变行为，仍然报错 |
+| D-18 | 只影响性能的选项在平台做不到时照常运行，影响行为的选项做不到时报错 | 要求同一份配置在 Mac 开发机和 Linux 上都能运行。监听端 FastOpen（省一个往返）、`Batch`（每次系统调用收几个包）、macOS 上的 ReusePort（能绑定但不分流）只影响性能，做不到时按普通方式运行，并由 `socket.Supported()`、`udp.Conn.Batch()` 报告实际情况；能做到的平台尽量真实现（macOS 监听端 FastOpen）。不适用于当前网络类型的选项（D-14）、达不到请求大小的缓冲区（D-16）、其他平台上的 ReusePort（第二次绑定会失败）会改变行为，仍然报错 |
+| D-19 | 拨出方向不支持 FastOpen，Dialer 设置了就报错 | 实测 Linux 上拿到 TFO cookie 后，用 FastOpen 拨一个已关闭的端口，Dial 约 100µs 返回成功，Write 也成功，错误到 Read 才出现，Dial 超时和 `DialEvent` 不再反映对端是否可达，网关会把挂掉的上游当成可用。这会改变行为，不属于 D-18 的性能项。网关拨上游通常不需要省这一个往返；监听端 FastOpen 保留 |
 
 ## 12.1 文档一致性
 

@@ -64,7 +64,10 @@ larger buffer, `ErrNoBuffer` is returned and buffered data is kept intact,
 so the caller can retry later or close.
 
 **Errors.** A read that returns data and an error hands the data out first;
-the error is sticky and returned on the next read.
+the error is sticky and returned on the next read. Reads that return no
+data and no error are retried up to 100 times in a row, as in bufio, then
+`io.ErrNoProgress` is returned (REG-22); it is not sticky, so a later call
+reads again.
 
 **Borrowed results.** Slices from `Peek` and `Buffered` stay valid until the
 next call that reads, discards or releases, the same rule as
@@ -112,7 +115,7 @@ runs; here the handler reads for itself and one contiguous buffer suffices.
 
 ## 8. Testing
 
-STREAM-01…STREAM-15, NF-20 (fuzz) in [docs/TESTING.md](../TESTING.md).
+STREAM-01…STREAM-16, NF-20 (fuzz) in [docs/TESTING.md](../TESTING.md).
 
 ## 9. Open items
 
