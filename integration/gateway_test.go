@@ -108,7 +108,7 @@ func TestFullQueueReleasesEvictedBuffers(t *testing.T) {
 	if dropped.Load() != 8 || q.Len() != 2 {
 		t.Fatalf("dropped=%d len=%d", dropped.Load(), q.Len())
 	}
-	if budget.Used() != 2*buf.Small {
+	if budget.Used() != 2*int64(buf.Capacity(1)) { // two 1-byte datagrams
 		t.Fatalf("budget holds %d, want only the 2 queued buffers", budget.Used())
 	}
 	q.Close()
@@ -126,7 +126,7 @@ func TestFullQueueReleasesEvictedBuffers(t *testing.T) {
 //
 // Checks: INT-07
 func TestBudgetExhaustionDropsThenRecovers(t *testing.T) {
-	budget := limit.NewBudget(buf.Small) // room for one held datagram
+	budget := limit.NewBudget(int64(buf.Capacity(1))) // room for one held 1-byte datagram
 	pool := buf.NewPool(budget)
 	held := make(chan *buf.Buf, 4)
 	var overBudget atomic.Int32

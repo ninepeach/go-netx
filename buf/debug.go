@@ -16,12 +16,20 @@ func (b *Buf) onGet() {
 	outstanding.Add(1)
 }
 
+// Poison is the byte debug builds fill a buffer with when it is released,
+// so a read after Release, or sending bytes that were never written, shows
+// up as a run of Poison in tests.
+const Poison = 0xDB
+
 func (b *Buf) onRelease() {
 	if !b.live {
 		panic("buf: Release of a buffer that is not owned (double Release?)")
 	}
 	b.live = false
 	outstanding.Add(-1)
+	for i := range b.full {
+		b.full[i] = Poison
+	}
 }
 
 // Outstanding returns the number of buffers obtained and not yet released.

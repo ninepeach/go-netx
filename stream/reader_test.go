@@ -93,7 +93,7 @@ func TestGrowsWhenNeededAndShrinksWhenQuiet(t *testing.T) {
 	if err != nil || !bytes.Equal(got, big) {
 		t.Fatalf("large peek: %v", err)
 	}
-	if r.big == nil || len(r.data) != buf.Medium || budget.Used() != buf.Medium {
+	if want := buf.Capacity(5000); r.big == nil || len(r.data) != want || budget.Used() != int64(want) { // 8KB
 		t.Fatalf("grown to %d, budget %d", len(r.data), budget.Used())
 	}
 	r.Discard(5000) // drained, but the last read was large: stays grown
@@ -130,7 +130,7 @@ func TestMaxBoundsBuffering(t *testing.T) {
 func TestBudgetExhaustedKeepsData(t *testing.T) {
 	budget := limit.NewBudget(buf.Small) // room for one Small buffer
 	pool := buf.NewPool(budget)
-	hog := pool.Get(1) // take it
+	hog := pool.Get(buf.Small) // take it all
 	data := seq(3000)
 	r := NewReader(&chunks{parts: [][]byte{data}}, pool, ReaderOptions{IdleSize: 512})
 	if _, err := r.Peek(100); err != nil { // fills the idle buffer: 512 bytes

@@ -199,16 +199,12 @@ func (r *Reader) ensure(n int) error {
 	return r.grow(len(r.data) + 1)
 }
 
-// grow moves the buffered data into a buffer of at least need bytes,
-// using the pool's size classes and never exceeding max.
+// grow moves the buffered data into a buffer of at least need bytes: the
+// pool's class for need (at least one class above the current buffer), never
+// exceeding max. Classes double, so a frame arriving in pieces grows the
+// buffer a logarithmic number of times.
 func (r *Reader) grow(need int) error {
-	size := r.max
-	for _, c := range [...]int{buf.Small, buf.Medium, buf.Large} {
-		if c >= need && c > len(r.data) {
-			size = min(c, r.max)
-			break
-		}
-	}
+	size := min(buf.Capacity(max(need, len(r.data)+1)), r.max)
 	if size <= len(r.data) {
 		return ErrTooLarge
 	}
