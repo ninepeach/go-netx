@@ -53,7 +53,8 @@ into an abort.
 
 **Shutdown sequence.**
 
-1. `OnStart(runCtx)`; on error the service is shut down and the server stops.
+1. `OnStart(runCtx)`; on error the service is shut down, `OnStop` runs, and
+   the joined error goes to `OnError` and is returned (step 7).
 2. `Serve(runCtx)` in a goroutine; state `running`.
 3. Wait for the stop signal or for `Serve` to return.
 4. State `stopping`; `Service.Shutdown(ctx)` with `ShutdownTimeout`. A second
@@ -63,7 +64,9 @@ into an abort.
 6. `OnStop` with a fresh `ShutdownTimeout` budget, never the drain's possibly
    expired context.
 7. The result joins Serve, Shutdown (except `context.Canceled`) and OnStop
-   errors, is passed to `OnError`, and returned.
+   errors, is passed to `OnError`, and returned. Both exits (a failed
+   `OnStart` and the normal one) go through one function, so `OnError`
+   sees every final error exactly once (REG-26).
 
 **Group.** `Serve` runs every member; the first member to fail cancels the
 others (abort). `Shutdown` drains all members concurrently and joins their
@@ -80,7 +83,10 @@ back; two Ctrl-C presses a human makes are far enough apart.
 `Stop` and `Shutdown` are safe from any goroutine and concurrently; outside
 `starting`–`stopping` they return `ErrNotRunning`. Hook panics are
 recovered by `protect` and returned as errors; a panic in `Serve` is
-reported the same way.
+reported the same way. That includes `OnError` (REG-27): a reporter that
+panics while logging the final error does not crash the caller; the panic
+is appended to the returned error, after the original error, which stays
+visible to `errors.Is`.
 
 ## 5. Decisions
 
@@ -93,7 +99,7 @@ reported the same way.
 
 ## 6. Testing
 
-Checkpoints RUN-01…RUN-16 and INT-01/02 in [docs/TESTING.md](../TESTING.md).
+Checkpoints RUN-01…RUN-18 and INT-01/02 in [docs/TESTING.md](../TESTING.md).
 Leak check after shutdown: RUN-16.
 
 ## 7. Open items

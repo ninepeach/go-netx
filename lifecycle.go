@@ -123,7 +123,10 @@ type Server struct {
 	// ShutdownTimeout budget, so a drain that used up its time does not
 	// leave OnStop with an expired context.
 	OnStop func(context.Context) error
-	// OnError receives the final error, if any.
+	// OnError receives the final error, if any, once, on every exit path
+	// including a failed OnStart; it is the same error LoopContext returns.
+	// A panic in it is recovered and appended to the returned error, after
+	// the original error.
 	OnError func(error)
 
 	// Signals that start shutdown in Loop. Default SIGINT and SIGTERM.
@@ -214,7 +217,7 @@ func (s *Server) LoopContext(parent context.Context) (result error) {
 			ctx, cancel := s.shutdownContext()
 			defer cancel()
 			shutdownErr := protect("shutdown", func() error { return s.Service.Shutdown(ctx) })
-			return errors.Join(err, shutdownErr, s.onStop())
+			return s.report(errors.Join(err, shutdownErr, s.onStop()))
 		}
 	}
 	s.setState(StateRunning)
@@ -249,11 +252,19 @@ func (s *Server) LoopContext(parent context.Context) (result error) {
 			serveErr = ErrAbortTimeout
 		}
 	}
-	result = errors.Join(serveErr, ignoreCanceled(shutdownErr), s.onStop())
-	if result != nil && s.OnError != nil {
-		s.OnError(result)
+	return s.report(errors.Join(serveErr, ignoreCanceled(shutdownErr), s.onStop()))
+}
+
+// report hands the final error to OnError. Every exit path of LoopContext
+// goes through it, so OnError sees each failure exactly once.
+func (s *Server) report(err error) error {
+	if err == nil || s.OnError == nil {
+		return err
 	}
-	return result
+	if perr := protect("error hook", func() error { s.OnError(err); return nil }); perr != nil {
+		return errors.Join(err, perr)
+	}
+	return err
 }
 
 func (s *Server) onStop() error {
