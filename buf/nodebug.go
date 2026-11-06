@@ -5,6 +5,10 @@ package buf
 // Debug reports whether ownership checks are compiled in.
 const Debug = false
 
+// Poison is the byte debug builds fill released buffers with; release
+// builds leave contents as they are.
+const Poison = 0xDB
+
 type debugState struct{}
 
 func (b *Buf) onGet()     {}

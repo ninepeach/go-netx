@@ -4,6 +4,10 @@
 
 ### Added
 
+- buf: `Capacity(n)` returns the capacity, and budget cost, of `Get(n)`;
+  `MinSize` (64) is the smallest class.
+- buf: debug builds (`-tags netxdebug`) fill released buffers with
+  `Poison` (0xDB), so use after Release and unwritten bytes show up in tests.
 - flow: `Flow.Touch` records activity and is now the only way `LastSeen`
   changes after creation; `Table.GetAndTouch` is the lookup-plus-Touch
   shortcut for the per-packet path. A Touch after `BeginClose`, `Close`,
@@ -40,6 +44,14 @@
 
 ### Changed
 
+- buf: size classes are powers of two from 64B to 64KB (11 classes)
+  instead of 2KB, 16KB and 64KB, so a buffer is less than twice its
+  request: a 3KB message holds 4KB instead of 16KB and a 50B packet 64B
+  instead of 2KB. Get + Release is unchanged at about 9ns and 0 allocs.
+  **Behaviour change:** budgets now cost `buf.Capacity(n)` per buffer;
+  code that computed budgets from `Small`/`Medium` should use `Capacity`.
+- buf: `Release` on a nil `*Buf` does nothing.
+- stream: `Reader` grows through the power-of-two classes.
 - flow: `Table.Get` is a pure lookup and `GetOrOpen` no longer refreshes
   an existing flow's `LastSeen`; a new flow's `LastSeen` starts at the
   table clock. **Behaviour change:** code that relied on lookups to keep

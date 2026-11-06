@@ -6,23 +6,25 @@ Overall design: [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 | Owns | Does not own |
 |---|---|
-| Pooled byte buffers in three size classes | I/O (see `stream`) |
+| Pooled byte buffers in power-of-two size classes (64B…64KB) | I/O (see `stream`) |
 | The ownership rules every go-netx package follows | Encoding |
 | Charging in-use memory to a `limit.Budget` | Process memory limits |
 | Debug-build ownership checks | |
 
-Imports `limit` only.
+Imports `limit` only (and `math/bits`, `sync`).
 
 ## 2. API
 
 ```go
-const Small, Medium, Large = 2 << 10, 16 << 10, 64 << 10
+const MinSize, Small, Medium, Large = 64, 2 << 10, 16 << 10, 64 << 10
+func Capacity(n int) int                 // capacity (and budget cost) of Get(n)
 func NewPool(budget *limit.Budget) *Pool // budget may be nil
-func (*Pool) Get(n int) *Buf             // len(B) == n; nil when over budget
+func (*Pool) Get(n int) *Buf             // len(B) == n, cap(B) == Capacity(n); nil when over budget
 func (*Pool) Copy(data []byte) *Buf      // borrowed → owned
 type Buf struct{ B []byte /* … */ }
-func (*Buf) Release()
+func (*Buf) Release()                    // nil-safe
 const Debug bool                          // true with -tags netxdebug
+const Poison = 0xDB                       // debug builds fill released buffers with it
 func Outstanding() int64                  // debug builds
 ```
 
@@ -41,9 +43,20 @@ Discard paths are where leaks happen, which is why `queue` has `OnDrop` and
 
 ## 4. Design
 
-**Three classes** (MTU datagram, typical stream read, largest datagram):
-few classes keep `sync.Pool` hit rates high. Requests above `Large` are
-allocated directly and not pooled, but still budgeted.
+**Power-of-two classes, 64B to 64KB (D-21).** Eleven classes, one
+`sync.Pool` each. A request takes the smallest class that holds it, found
+with one `bits.Len`, so capacity is under twice the length (from 64B up)
+and the budget, which charges capacity, holds at least half data. This is
+what mainstream Go pools do (bytedance/gopkg `mcache` used by netpoll,
+valyala/bytebufferpool used by fasthttp, xtaci/smux, gnet, libp2p). The
+earlier three classes (2KB, 16KB, 64KB) wasted up to 8×: a 3KB IM message
+held 16KB and a 50B game packet 2KB; now they hold 4KB and 64B. More
+classes cost nothing measurable: each class is its own per-P pool, and Get
++ Release stayed at about 9ns. 64B is the floor because smaller buffers
+save little next to the `Buf` header; 64KB is the largest UDP datagram.
+Requests above `Large` are allocated directly and not pooled, but still
+budgeted. `Capacity(n)` exposes the rounding so callers can plan budgets
+and `stream.Reader` can grow class by class.
 
 **`*Buf`, not `[]byte`, in the pool.** Putting a slice into `sync.Pool`
 allocates a header on every Put; a pointer does not. `Get` sets `B` to the
@@ -56,11 +69,19 @@ Released buffers may stay in `sync.Pool` until the GC reclaims them, so the
 budget bounds how much data the gateway holds at once, not process RSS.
 
 **Contents are not zeroed** on Release (cost); `Get(n)` exposes only `n`
-bytes, and callers overwrite what they use.
+bytes, and callers overwrite what they use. Sending a buffer that was not
+fully written would leak a previous owner's bytes, which is what the debug
+poisoning below is for.
+
+**`Release` of nil is a no-op**, so `b := pool.Get(n); defer b.Release()`
+is safe when the budget refuses and Get returns nil.
 
 **Debug builds** (`-tags netxdebug`): each Buf tracks whether it is owned;
-releasing twice panics, and `Outstanding()` counts unreleased buffers.
-Release builds compile these checks away. Tests and stress runs use both.
+releasing twice panics, `Outstanding()` counts unreleased buffers, and
+Release fills the whole buffer with `Poison` (0xDB), so a read after
+Release, or bytes sent without being written, show up as runs of 0xDB in
+tests. Release builds compile these checks away. Tests and stress runs use
+both.
 
 ## 5. Concurrency
 
@@ -68,15 +89,27 @@ Release builds compile these checks away. Tests and stress runs use both.
 
 ## 6. Performance (2 vCPU)
 
-Get + Release about 11ns, 0 allocations.
+Get + Release about 9ns at every pooled size from 64B to 64KB, 0
+allocations, the same as the three-class version measured in the same
+run (`BenchmarkGetReleaseBySize`, medians of 6). Unpooled (70KB) about
+11µs and 2 allocations, unchanged.
+
+| request | capacity before | capacity now |
+|---|---|---|
+| 64B | 2KB | 64B |
+| 200B | 2KB | 256B |
+| 1200B | 2KB | 2KB |
+| 3000B | 16KB | 4KB |
+| 9000B | 16KB | 16KB |
+| 40000B | 64KB | 64KB |
 
 ## 7. Decisions
 
-D-05 (budget counts in-use memory only).
+D-05 (budget counts in-use memory only), D-21 (power-of-two classes).
 
 ## 8. Testing
 
-BUF-01…BUF-14, NF-11 (fuzz) in [docs/TESTING.md](../TESTING.md).
+BUF-01…BUF-17, NF-11 (fuzz) in [docs/TESTING.md](../TESTING.md).
 
 ## 9. Open items
 

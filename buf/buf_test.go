@@ -2,6 +2,7 @@ package buf
 
 import (
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -12,7 +13,8 @@ import (
 func TestGetClasses(t *testing.T) {
 	p := NewPool(nil)
 	for _, tc := range []struct{ n, cap int }{
-		{0, Small}, {1500, Small}, {Small + 1, Medium}, {Large, Large}, {Large + 1, Large + 1},
+		{0, MinSize}, {1, MinSize}, {64, 64}, {65, 128}, {1500, Small}, {Small + 1, 4 << 10},
+		{Medium + 1, 32 << 10}, {Large, Large}, {Large + 1, Large + 1},
 	} {
 		b := p.Get(tc.n)
 		if len(b.B) != tc.n || cap(b.full) != tc.cap {
@@ -26,7 +28,7 @@ func TestGetClasses(t *testing.T) {
 func TestBudgetChargesCapacity(t *testing.T) {
 	budget := limit.NewBudget(Small * 2)
 	p := NewPool(budget)
-	a, b := p.Get(10), p.Get(10)
+	a, b := p.Get(Small), p.Get(Small-100) // both cost a 2KB class
 	if a == nil || b == nil {
 		t.Fatal("expected two small buffers")
 	}
@@ -172,5 +174,72 @@ func TestPoolCorrectAcrossGC(t *testing.T) {
 		if budget.Used() != 0 {
 			t.Fatalf("round %d: used=%d", round, budget.Used())
 		}
+	}
+}
+
+// Checks: BUF-12, NF-16
+func BenchmarkGetReleaseBySize(b *testing.B) {
+	for _, n := range []int{64, 200, 1200, 3000, 9000, 40000, 70000} {
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
+			p := NewPool(nil)
+			b.ReportAllocs()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					p.Get(n).Release()
+				}
+			})
+		})
+	}
+}
+
+// Every class is a power of two from MinSize to Large; a buffer's capacity
+// is under twice its length (from MinSize up) and is what the budget pays.
+// Checks: BUF-15
+func TestPowerOfTwoClasses(t *testing.T) {
+	budget := limit.NewBudget(1 << 30)
+	p := NewPool(budget)
+	seen := map[int]bool{}
+	for n := 0; n <= Large+3; n++ {
+		c := Capacity(n)
+		switch {
+		case n > Large:
+			if c != n {
+				t.Fatalf("Capacity(%d) = %d, want n (unpooled)", n, c)
+			}
+			continue
+		case c < MinSize || c&(c-1) != 0 || c < n:
+			t.Fatalf("Capacity(%d) = %d: not a power of two >= max(n, MinSize)", n, c)
+		case n > MinSize && c >= 2*n:
+			t.Fatalf("Capacity(%d) = %d: at least twice the request", n, c)
+		}
+		seen[c] = true
+		if n%97 == 0 || c == n { // spot-check Get against Capacity
+			b := p.Get(n)
+			if len(b.B) != n || cap(b.B) != c || budget.Used() != int64(c) {
+				t.Fatalf("Get(%d): len %d cap %d budget %d, want cap %d", n, len(b.B), cap(b.B), budget.Used(), c)
+			}
+			b.Release()
+		}
+	}
+	if len(seen) != 11 {
+		t.Fatalf("%d classes, want 11 (64B…64KB)", len(seen))
+	}
+}
+
+// Checks: BUF-16
+func TestReleaseNilIsNoop(t *testing.T) {
+	budget := limit.NewBudget(MinSize)
+	p := NewPool(budget)
+	held := p.Get(1)
+	refused := p.Get(1) // over budget: nil
+	if refused != nil {
+		t.Fatal("expected the budget to refuse")
+	}
+	refused.Release() // must not panic
+	var nilBuf *Buf
+	nilBuf.Release()
+	held.Release()
+	if budget.Used() != 0 {
+		t.Fatalf("used=%d", budget.Used())
 	}
 }

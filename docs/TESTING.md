@@ -312,7 +312,7 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 
 | ID | P | 检查点 | 状态 | 测试 | 说明 |
 |---|---|---|---|---|---|
-| BUF-01 | P0 | 按大小选到正确的档位；超大请求不进池 | ✅ | `buf.GetClasses` |  |
+| BUF-01 | P0 | 按大小选到正确的档位（2 的幂，64B…64KB）；超大请求不进池 | ✅ | `buf.GetClasses` |  |
 | BUF-02 | P0 | `len(B)` 等于请求的大小 | ✅ | `buf.GetClasses` |  |
 | BUF-03 | P0 | `Copy` 不与源数据共享内存 | ✅ | `buf.Copy` |  |
 | BUF-04 | P0 | 预算按容量扣除，释放后归还，超出时 Get 返回 nil | ✅ | `buf.BudgetChargesCapacity`<br>`buf.BudgetRejectsLargeBufferWithoutPartialCharge`<br>`buf.ReleaseClearsViewAndRefundsUnpooledCapacity` |  |
@@ -323,9 +323,12 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | BUF-09 | P1 | 负数大小时 panic | ✅ | `buf.GetNegativeSizePanics` |  |
 | BUF-10 | P1 | 扩容、Reset | ➖ |  | 没有这两个 API，Buf 的大小固定 |
 | BUF-11 | P2 | GC 回收池中对象后，正确性不受影响 | ✅ | `buf.PoolCorrectAcrossGC` |  |
-| BUF-12 | P2 | 热路径零分配 | ✅ | `buf.BenchmarkGetRelease` |  |
+| BUF-12 | P2 | 热路径零分配 | ✅ | `buf.BenchmarkGetReleaseBySize`<br>`buf.BenchmarkGetRelease` |  |
 | BUF-13 | P1 | Release 后 `B` 被置为 nil，避免继续使用旧的切片 | ✅ | `buf.ReleaseClearsViewAndRefundsUnpooledCapacity` |  |
 | BUF-14 | P1 | 预算不足时不会先扣掉一部分 | ✅ | `buf.BudgetRejectsLargeBufferWithoutPartialCharge` |  |
+| BUF-15 | P0 | 档位都是 2 的幂，共 11 档（64B…64KB）；容量不小于请求、从 64B 起小于请求的 2 倍；`Capacity(n)` 与 `Get(n)` 的容量和预算扣除一致 | ✅ | `buf.PowerOfTwoClasses` |  |
+| BUF-16 | P1 | 对 nil 调用 `Release` 什么都不做（预算不足时 Get 返回的 nil 可以直接 Release） | ✅ | `buf.ReleaseNilIsNoop` |  |
+| BUF-17 | P1 | `netxdebug` 下 Release 把整块缓冲填成 `Poison`，释放后的读取和下一个持有者看不到旧数据 | ✅ | `buf.ReleasePoisonsInDebug` | 仅 netxdebug 构建 |
 
 ## 8.5 stream：流式读写
 
@@ -472,6 +475,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | D-18 | 只影响性能的选项在平台做不到时照常运行，影响行为的选项做不到时报错 | 要求同一份配置在 Mac 开发机和 Linux 上都能运行。监听端 FastOpen（省一个往返）、`Batch`（每次系统调用收几个包）、macOS 上的 ReusePort（能绑定但不分流）只影响性能，做不到时按普通方式运行，并由 `socket.Supported()`、`udp.Conn.Batch()` 报告实际情况；能做到的平台尽量真实现（macOS 监听端 FastOpen）。不适用于当前网络类型的选项（D-14）、达不到请求大小的缓冲区（D-16）、其他平台上的 ReusePort（第二次绑定会失败）会改变行为，仍然报错 |
 | D-19 | 拨出方向不支持 FastOpen，Dialer 设置了就报错 | 实测 Linux 上拿到 TFO cookie 后，用 FastOpen 拨一个已关闭的端口，Dial 约 100µs 返回成功，Write 也成功，错误到 Read 才出现，Dial 超时和 `DialEvent` 不再反映对端是否可达，网关会把挂掉的上游当成可用。这会改变行为，不属于 D-18 的性能项。网关拨上游通常不需要省这一个往返；监听端 FastOpen 保留 |
 | D-20 | `Get` 只查找，`Touch` 是唯一更新 LastSeen 的操作 | 查找时顺带刷新时间，会让后台查询、`Range`、管理操作把空闲 flow 一直续命。拆开后，空闲超时只反映网关显式记录的真实流量。查找与 Touch 之间被 Sweep 插入的竞态（REG-15）改用“LastSeen 加冻结位”的单字 CAS 解决。代价：网关在收到数据时要自己调用 `Touch` 或 `GetAndTouch`；`Get` 因此更快 |
+| D-21 | buf 改为 2 的幂分档（64B…64KB，共 11 档），取代原来的 2KB、16KB、64KB 三档 | 三档最多浪费 8 倍，预算按容量扣，等于同样的预算少装好几倍数据（3KB 的消息占 16KB，50B 的包占 2KB）。主流 Go 缓冲池（netpoll 用的 mcache、fasthttp 用的 bytebufferpool、smux、gnet、libp2p）都按 2 倍分档。实测档位增多不影响速度（Get + Release 仍约 9ns，0 分配）。下限 64B：再小相对 `Buf` 本身的开销省不了多少 |
 
 ## 12.1 文档一致性
 
@@ -501,7 +505,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | NF-13 | Bench | TCP accept 吞吐 | ✅ | `tcp.BenchmarkAccept` | 实测约 79µs/连接（建立、接受、关闭），23 次分配 |
 | NF-14 | Bench | 不同 flow 数量下的查找和清扫 | ✅ | `flow.BenchmarkGetAddrPort`<br>`flow.BenchmarkGetAndTouch`<br>`flow.BenchmarkGetBySize`<br>`flow.BenchmarkGetOrOpenExisting`<br>`flow.BenchmarkSweepBySize` | `flow.BenchmarkGetBySize`、`flow.BenchmarkSweepBySize` |
 | NF-15 | Bench | Queue | ✅ | `queue.BenchmarkPushPop` |  |
-| NF-16 | Bench | Buf | ✅ | `buf.BenchmarkGetRelease` |  |
+| NF-16 | Bench | Buf | ✅ | `buf.BenchmarkGetReleaseBySize`<br>`buf.BenchmarkGetRelease` |  |
 | NF-19 | Bench | 共享计数器 | ✅ | `counter.BenchmarkCounterInc` |  |
 | NF-20 | Fuzz | stream.Reader：随机的读取分块与 Peek/Discard 序列与模型一致 | ✅ | `stream.FuzzReader` | `make fuzz` |
 | NF-17 | 交叉编译 | linux/amd64、linux/386、darwin/arm64、windows/amd64、freebsd/amd64、js/wasm | ⚙️ |  | 对 linux/amd64、linux/386、darwin/arm64、windows/amd64、freebsd/amd64、js/wasm 执行 `GOOS=… GOARCH=… go vet ./...` |
