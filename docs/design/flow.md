@@ -117,9 +117,14 @@ and the flow is visibly not Open.
   `GetOrOpen` on an existing key 50ns (medians of 5, 2 vCPU, measured with
   the Touch change; `Get` used to store `LastSeen` on every call and was
   52/69/112/210ns in the same run of the old code).
-- `Sweep` with nothing to evict: about 16ns per flow at 10k, 34ns at 100k,
-  105ns at 1M; a million flows cost about 100ms per sweep, roughly 10% of a
-  core at the 1s maximum tick.
+- `Sweep` with nothing to evict (`BenchmarkSweepBySize`): about 10ns per
+  flow at 10k (0.1ms per sweep) and 13.5ns at 100k (1.4ms), stable across
+  runs. At 1M the table no longer fits in the CPU caches and the cost
+  depends on the machine: 19–50ms per sweep across runs on one 2 vCPU VM
+  (Intel Xeon 2.1GHz, Linux 6.18, Go 1.24, 2026-11-06; six separate runs
+  37–46ms), 105ms on another 2 vCPU VM (2026-11-05). At the 1s maximum
+  tick a million flows cost about 2–10% of a core; plan with the upper
+  end.
 
 ## 5. Decisions
 
