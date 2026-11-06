@@ -35,6 +35,13 @@
 
 ### Changed
 
+- flow: `TableOptions.OnClose` now runs for every flow that leaves the
+  table, also when the caller had already closed it with `Flow.Close`;
+  before, such flows left without `OnClose`. **Behaviour change:** release
+  a flow's resources in `OnClose` or on `Flow.Close` returning true, not
+  both.
+- flow: a panic in `GetOrOpen`'s `newValue` or in `Range`'s `fn` no longer
+  leaves the shard locked forever; the panic propagates as before.
 - netx: `Server.OnError` is also called when `OnStart` fails, and a panic
   in `OnError` is recovered and appended to the returned error instead of
   crashing `LoopContext`.

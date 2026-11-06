@@ -16,8 +16,11 @@ type TableOptions[K comparable, V any] struct {
 	// idle eviction. Eviction only runs while Run is active.
 	IdleTimeout time.Duration
 	// OnClose is called exactly once for every flow that leaves the table,
-	// whether by Remove, idle eviction or Close, after it is Closed. It runs
-	// outside table locks.
+	// whether by Remove, idle eviction or Close, after it is Closed. That
+	// holds even if the caller closed the flow itself before it left: the
+	// table calls OnClose because the flow left, not because Table closed
+	// it. So release a flow's resources in one place, OnClose or the true
+	// return of Flow.Close, not both. It runs outside table locks.
 	OnClose func(K, *Flow[V])
 }
 
@@ -79,10 +82,12 @@ func (t *Table[K, V]) Get(k K) (*Flow[V], bool) {
 }
 
 // GetOrOpen returns the flow for k, creating it with newValue if absent.
-// newValue runs under the shard lock and must be fast.
+// newValue runs under the shard lock and must be fast. If it panics, the
+// panic propagates, no flow is inserted and the shard stays usable.
 func (t *Table[K, V]) GetOrOpen(k K, newValue func() V) (f *Flow[V], created bool) {
 	s := t.shard(k)
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	f, ok := s.m[k]
 	if !ok {
 		var v V
@@ -93,7 +98,6 @@ func (t *Table[K, V]) GetOrOpen(k K, newValue func() V) (f *Flow[V], created boo
 		s.m[k] = f
 	}
 	f.lastSeen.Store(t.now.Load())
-	s.mu.Unlock()
 	return f, !ok
 }
 
@@ -114,8 +118,13 @@ func (t *Table[K, V]) Remove(k K, id uint64) bool {
 	return true
 }
 
+// closed finishes a flow that the caller has just deleted from its shard.
+// Deleting under the lock happens once per flow, so the caller is the only
+// one to get here for f and OnClose runs exactly once, whether or not the
+// flow was already Closed by someone else (REG-28).
 func (t *Table[K, V]) closed(k K, f *Flow[V]) {
-	if f.Close() && t.onClose != nil {
+	f.Close()
+	if t.onClose != nil {
 		t.onClose(k, f)
 	}
 }
@@ -133,19 +142,27 @@ func (t *Table[K, V]) Len() int {
 }
 
 // Range calls fn for every flow until fn returns false. fn runs under a
-// shard lock and must not call back into the table.
+// shard lock and must not call back into the table. If fn panics, the panic
+// propagates and the shard stays usable.
 func (t *Table[K, V]) Range(fn func(K, *Flow[V]) bool) {
 	for i := range t.shards {
-		s := &t.shards[i]
-		s.mu.Lock()
-		for k, f := range s.m {
-			if !fn(k, f) {
-				s.mu.Unlock()
-				return
-			}
+		if !t.shards[i].rangeLocked(fn) {
+			return
 		}
-		s.mu.Unlock()
 	}
+}
+
+// rangeLocked runs fn over one shard; the deferred unlock keeps the shard
+// usable if fn panics.
+func (s *shard[K, V]) rangeLocked(fn func(K, *Flow[V]) bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, f := range s.m {
+		if !fn(k, f) {
+			return false
+		}
+	}
+	return true
 }
 
 // Sweep evicts flows idle longer than IdleTimeout as of now and returns how
