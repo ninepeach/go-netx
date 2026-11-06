@@ -289,6 +289,10 @@ contiguous buffer is enough.
 3. **Transfer** — handing a `*buf.Buf` on (for example `queue.Ring.Push`)
    transfers ownership. If the transfer fails (`Push` returns false), the
    caller still owns it.
+4. **Shared** — immutable data many connections send, such as an encoded
+   configuration, stays a plain `[]byte` outside the pool and goes out with
+   `stream.Writer.AddShared`: nobody owns or releases it, and it must not
+   change while queued.
 
 Discard paths are where leaks happen, so `queue.Options.OnDrop` receives
 every evicted or drained item. For buffers, pass `(*buf.Buf).Release`.

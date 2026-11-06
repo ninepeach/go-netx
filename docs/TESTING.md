@@ -357,6 +357,9 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | STREAM-13 | P1 | 目标实现了 `WriteBuffers`（如 `*tcp.Conn`）时使用它；普通 io.Writer 退化为逐个写出，结果相同 | ✅ | `stream.BuffersWriterPreferredPlainWriterFallsBack` |  |
 | STREAM-14 | P1 | `tcp.Conn.WriteBuffers` 透传 writev 到底层连接，数据完整到达 | ✅ | `tcp.ConnWriteBuffers` |  |
 | STREAM-15 | P2 | 逐条 Write 与合并写出的对比（Benchmark） | ✅ | `stream.BenchmarkBacklog` | 经 `*tcp.Conn` 实测：积压 8 条快约 6 倍，32 条快约 9～10 倍，1 条与直接 Write 相同，均为零分配 |
+| STREAM-18 | P0 | `AddShared` 与 `Add` 按调用顺序混排写出（writev 与逐个 Write 两种目标）；共享数据不被释放、不被改动；`Pending` 计入；Flush 后 Writer 不再引用任何已排队的切片；空切片忽略 | ✅ | `stream.AddSharedInterleavesWithoutReleasing` |  |
+| STREAM-19 | P1 | 写失败和 `Discard` 时只释放 `Add` 的缓冲，共享数据不受影响，Writer 之后照常可用 | ✅ | `stream.AddSharedOnFailureAndDiscard` |  |
+| STREAM-20 | P1 | 同一份 1MB 只读数据经 16 个连接并发发送，内容完整、无竞态、源数据不变；`AddShared` + `Flush` 零分配 | ✅ | `stream.SharedPayloadToManyConnections` | 游戏配置等广播场景 |
 
 ## 9. internal 与可观测性
 

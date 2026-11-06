@@ -4,6 +4,10 @@
 
 ### Added
 
+- stream: `Writer.AddShared([]byte)` queues immutable data shared by many
+  connections (an encoded game configuration, a broadcast) in order with
+  owned buffers, without copying it or taking ownership; `Pending` counts
+  it. Steady-state `AddShared` + `Flush` allocates nothing.
 - buf: `Capacity(n)` returns the capacity, and budget cost, of `Get(n)`;
   `MinSize` (64) is the smallest class.
 - buf: debug builds (`-tags netxdebug`) fill released buffers with
