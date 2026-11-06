@@ -36,8 +36,9 @@ var ErrTooLarge, ErrNoBuffer, ErrReleased
 
 func NewWriter(dst io.Writer) *Writer
 func (*Writer) Add(b *buf.Buf)            // takes ownership
-func (*Writer) Flush() (int64, error)     // writes all in order, releases all
-func (*Writer) Discard()                  // releases all without writing
+func (*Writer) AddShared(p []byte)        // borrows immutable shared data; never released
+func (*Writer) Flush() (int64, error)     // writes all in order, releases the owned buffers
+func (*Writer) Discard()                  // drops all without writing, releases the owned
 func (*Writer) Pending() (buffers, bytes int)
 type BuffersWriter interface{ WriteBuffers(*net.Buffers) (int64, error) }
 ```
@@ -76,17 +77,33 @@ next call that reads, discards or releases, the same rule as
 
 ## 4. Writer design
 
-`Add` appends a `*buf.Buf` and takes ownership. `Flush`:
+`Add` appends a `*buf.Buf` and takes ownership. `AddShared` appends a
+plain `[]byte` without taking ownership. Both go into one send vector in
+call order, so a frame header from the pool and a shared payload are sent
+together. `Flush`:
 
-- 0 buffers: nothing.
-- 1 buffer: one `Write` (writev costs more than it saves for one buffer).
-- 2+ buffers: one `net.Buffers` write. If the destination implements
+- 0 slices: nothing.
+- 1 slice: one `Write` (writev costs more than it saves for one slice).
+- 2+ slices: one `net.Buffers` write. If the destination implements
   `BuffersWriter` it is used, otherwise `net.Buffers.WriteTo`.
 
-Every added buffer is released after `Flush`, whether the write succeeded
-or not: after a failed or partial write the stream is broken. The vector
-slices are reused and cleared, so steady-state `Add`+`Flush` allocates
-nothing.
+Every buffer from `Add` is released after `Flush`, whether the write
+succeeded or not: after a failed or partial write the stream is broken.
+Shared slices are never released; the caller must not change them until
+`Flush` or `Discard` returns, after which the Writer keeps no reference.
+The vector slices are reused and cleared, so steady-state `Add`+`Flush`
+and `AddShared`+`Flush` allocate nothing.
+
+**Shared data.** Data that is the same for every connection — an encoded
+game configuration loaded at login, a broadcast message — should be
+encoded once into an immutable `[]byte` and sent with `AddShared` to each
+connection, instead of being copied into a pooled buffer per connection.
+Measured (2 vCPU): allocating 1MB costs about 140µs and 4MB about 1.5ms,
+so 10,000 players reconnecting after a restart would spend about 1.4s of
+CPU and 10GB of allocation copying a 1MB configuration; shared, it costs
+one copy in memory. A hot reload swaps in a new slice; writes still using
+the old one finish with it. Read-only sharing across goroutines is
+race-free (STREAM-20).
 
 **Why `BuffersWriter`.** `net.Buffers` uses writev only on the standard
 library's own connection types. Any wrapper (`*tcp.Conn`, a metrics
@@ -116,7 +133,7 @@ runs; here the handler reads for itself and one contiguous buffer suffices.
 
 ## 8. Testing
 
-STREAM-01…STREAM-17, NF-20 (fuzz) in [docs/TESTING.md](../TESTING.md).
+STREAM-01…STREAM-20, NF-20 (fuzz) in [docs/TESTING.md](../TESTING.md).
 
 ## 9. Open items
 

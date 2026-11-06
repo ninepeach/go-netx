@@ -37,6 +37,9 @@ func Outstanding() int64                  // debug builds
    releases it exactly once.
 3. **Transfer**: handing a `*Buf` on (`queue.Ring.Push`, `stream.Writer.Add`)
    transfers ownership. If the transfer fails, the caller still owns it.
+4. **Shared**: immutable data many connections send (`stream.Writer.AddShared`)
+   is a plain `[]byte` outside the pool: never owned, never released, not
+   changed while queued.
 
 Discard paths are where leaks happen, which is why `queue` has `OnDrop` and
 `stream.Writer` releases on every Flush outcome.
