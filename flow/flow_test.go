@@ -99,6 +99,20 @@ func BenchmarkGetAddrPort(b *testing.B) {
 	})
 }
 
+// GetOrOpen on an existing key: the per-packet path of a UDP gateway.
+// Checks: FLOW-16, NF-14
+func BenchmarkGetOrOpenExisting(b *testing.B) {
+	tb := NewTable(TableOptions[netip.AddrPort, int]{})
+	key := netip.MustParseAddrPort("10.0.0.1:5000")
+	tb.GetOrOpen(key, nil)
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			tb.GetOrOpen(key, nil)
+		}
+	})
+}
+
 // An active flow must never be evicted while it keeps being touched, with
 // Run sweeping concurrently.
 // Checks: FLOW-08, FLOW-09, NF-05

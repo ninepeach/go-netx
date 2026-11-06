@@ -53,7 +53,20 @@ key: `Remove(key, id)` checks the ID. No separate epoch field is needed.
 **Exactly-once close.** `Close` uses CAS; exactly one caller gets `true`, so
 releasing resources on `true` is safe. The table calls `OnClose` after the
 flow is Closed and outside shard locks, for every path out of the table:
-`Remove`, idle expiry, `Close`.
+`Remove`, idle expiry, `Close`. Exactly-once comes from the table, not from
+`Close`'s return value (REG-28): a flow is deleted from its shard under the
+lock once, and the path that deleted it calls `OnClose`, even if the caller
+had already closed the flow. A gateway therefore releases a flow's
+resources in one place — `OnClose`, or the `true` of `Flow.Close` — not
+both.
+
+**Callbacks and locks.** `GetOrOpen`'s `newValue` and `Range`'s `fn` run
+under a shard lock, released by `defer`, so a panic in them propagates
+without leaving the shard locked (REG-29); a panicking `newValue` inserts
+nothing. `defer` costs nothing measurable here (`GetOrOpen` on an existing
+key 53–60ns before and after, 0 allocations, 2 vCPU). `OnClose` runs
+outside locks; a panic in it propagates, and the flows `Sweep` or `Close`
+had not yet reported are no longer in the table and are not reported.
 
 **Sharding.** Keys hash with `maphash.Comparable` to one of a power-of-two
 number of shards, each a mutex and a map, padded to its own cache line.
@@ -85,7 +98,7 @@ million flows, then becomes incremental (a few shards per tick).
 
 ## 6. Testing
 
-FLOW-01…FLOW-16, NF-05 (stress), NF-09 (fuzz), NF-14 in
+FLOW-01…FLOW-19, NF-05 (stress), NF-09 (fuzz), NF-14 in
 [docs/TESTING.md](../TESTING.md).
 
 ## 7. Open items

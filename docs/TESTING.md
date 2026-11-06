@@ -231,7 +231,10 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | FLOW-13 | P1 | Run 退出时关闭所有 flow | ✅ | `flow.RunClosesAllOnExit` |  |
 | FLOW-14 | P2 | 大量 flow 下 Sweep 的耗时 | ✅ | `flow.BenchmarkSweepBySize` | 实测（2 vCPU）：1 万 flow 约 0.16ms，10 万约 3.4ms，100 万约 105ms；单个 flow 的成本随规模上升，原因是缓存未命中 |
 | FLOW-15 | P2 | 不同 key 哈希冲突时不会被合并 | ➖ |  | 用的是 Go map，key 按值比较，哈希只用来选分片 |
-| FLOW-16 | P2 | 查找零分配 | ✅ | `flow.BenchmarkGetAddrPort` |  |
+| FLOW-16 | P2 | 查找零分配 | ✅ | `flow.BenchmarkGetAddrPort`<br>`flow.BenchmarkGetOrOpenExisting` |  |
+| FLOW-17 | P1 | 调用方先 `Flow.Close()`，再经 Remove、Sweep 或 Table.Close 离开表，`OnClose` 仍恰好调用一次 | ✅ | `flow.OnCloseRunsForFlowsClosedByTheCaller` |  |
+| FLOW-18 | P1 | `GetOrOpen` 的 newValue panic 后，panic 照常向上传播，分片锁被释放，表照常可用，且没有插入 flow | ✅ | `flow.GetOrOpenPanicReleasesShard` |  |
+| FLOW-19 | P1 | `Range` 的 fn panic 后，panic 照常向上传播，分片锁被释放，表照常可用 | ✅ | `flow.RangePanicReleasesShard` |  |
 
 ## 6. limit：资源控制
 
@@ -430,6 +433,8 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | REG-25 | socket | macOS FastOpen 测试无条件要求 `TCP_FASTOPEN` 非零，内核关闭 Fast Open 时，即使降级行为正确也会失败 | SOCK-26 | ✅ |
 | REG-26 | runtime | OnStart 失败的退出路径不调用 `OnError`，与“接收最终错误”的约定不一致 | RUN-17 | ✅ |
 | REG-27 | runtime | `OnError` 没有经过 `protect`，它 panic 时 LoopContext 直接 panic | RUN-18 | ✅ |
+| REG-28 | flow | 调用方先 `Flow.Close()`，flow 再离开表时 `OnClose` 不会调用，违反“每个离开表的 flow 恰好一次” | FLOW-17 | ✅ |
+| REG-29 | flow | `GetOrOpen` 的 newValue 或 `Range` 的 fn panic 后分片锁不释放，之后访问该分片永久阻塞 | FLOW-18、FLOW-19 | ✅ |
 
 ### 设计决定
 
@@ -483,7 +488,7 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | NF-12 | Bench | UDP 回显 | ✅ | `udp.BenchmarkEcho` | 约 10µs，0 次分配 |
 | NF-22 | Bench | UDP 接收（队列中有积压时每个数据报的接收开销），按 Batch 1、8、32 对比 | ✅ | `udp.BenchmarkRecv` | 2 vCPU：Batch 1 约 2.2µs，Batch 8 约 1.2µs，0 次分配 |
 | NF-13 | Bench | TCP accept 吞吐 | ✅ | `tcp.BenchmarkAccept` | 实测约 79µs/连接（建立、接受、关闭），23 次分配 |
-| NF-14 | Bench | 不同 flow 数量下的查找和清扫 | ✅ | `flow.BenchmarkGetAddrPort`<br>`flow.BenchmarkGetBySize`<br>`flow.BenchmarkSweepBySize` | `flow.BenchmarkGetBySize`、`flow.BenchmarkSweepBySize` |
+| NF-14 | Bench | 不同 flow 数量下的查找和清扫 | ✅ | `flow.BenchmarkGetAddrPort`<br>`flow.BenchmarkGetBySize`<br>`flow.BenchmarkGetOrOpenExisting`<br>`flow.BenchmarkSweepBySize` | `flow.BenchmarkGetBySize`、`flow.BenchmarkSweepBySize` |
 | NF-15 | Bench | Queue | ✅ | `queue.BenchmarkPushPop` |  |
 | NF-16 | Bench | Buf | ✅ | `buf.BenchmarkGetRelease` |  |
 | NF-19 | Bench | 共享计数器 | ✅ | `counter.BenchmarkCounterInc` |  |
