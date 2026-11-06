@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"syscall"
 	"time"
 )
@@ -90,8 +91,12 @@ type BufferSetter interface {
 // for sockets not created through ListenConfig or Dialer. When c also
 // implements syscall.Conn (as *net.UDPConn and *net.TCPConn do), the sizes
 // are verified as in Options and a short size is a *BufferSizeError;
-// otherwise they are only set.
+// otherwise they are only set. A nil c, including a typed nil such as a
+// nil *net.UDPConn, is an error.
 func SetBuffers(c BufferSetter, opts Options) error {
+	if isNil(c) {
+		return errors.New("socket: SetBuffers: nil connection")
+	}
 	if sc, ok := c.(syscall.Conn); ok && (opts.RecvBuffer > 0 || opts.SendBuffer > 0) {
 		raw, err := sc.SyscallConn()
 		if err != nil {
@@ -214,4 +219,17 @@ func checkNetwork(network string, o Options) error {
 		return &UnsupportedOptionError{Option: "TCP keep-alive", Platform: where}
 	}
 	return nil
+}
+
+// isNil reports whether c is nil or an interface holding a nil pointer.
+func isNil(c BufferSetter) bool {
+	if c == nil {
+		return true
+	}
+	v := reflect.ValueOf(c)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return v.IsNil()
+	}
+	return false
 }

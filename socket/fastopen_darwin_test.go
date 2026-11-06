@@ -15,19 +15,37 @@ func TestFastOpenOnDarwin(t *testing.T) {
 	lc := socket.ListenConfig(opts)
 	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(err) // never an error: without kernel support it runs without
 	}
 	defer ln.Close()
-	raw, _ := ln.(*net.TCPListener).SyscallConn()
-	var v int
-	var gerr error
-	raw.Control(func(fd uintptr) { v, gerr = syscall.GetsockoptInt(int(fd), syscall.IPPROTO_TCP, 0x105) })
-	if gerr != nil || v == 0 {
-		t.Fatalf("TCP_FASTOPEN on the listener = %d, %v; want enabled", v, gerr)
+
+	// net.inet.tcp.fastopen: bit 1 client, bit 2 server.
+	mode, serr := syscall.SysctlUint32("net.inet.tcp.fastopen")
+	t.Logf("net.inet.tcp.fastopen = %d (%v)", mode, serr)
+	if serr == nil && mode&2 != 0 {
+		raw, _ := ln.(*net.TCPListener).SyscallConn()
+		var v int
+		var gerr error
+		raw.Control(func(fd uintptr) { v, gerr = syscall.GetsockoptInt(int(fd), syscall.IPPROTO_TCP, 0x105) })
+		if gerr != nil || v == 0 {
+			t.Fatalf("server Fast Open enabled in the kernel, but TCP_FASTOPEN on the listener = %d, %v", v, gerr)
+		}
 	}
+
+	// Either way the listener serves.
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			c.Write([]byte("ok"))
+			c.Close()
+		}
+	}()
 	c, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Close()
+	defer c.Close()
+	b := make([]byte, 2)
+	if n, err := c.Read(b); err != nil || string(b[:n]) != "ok" {
+		t.Fatalf("read %q, %v", b[:n], err)
+	}
 }

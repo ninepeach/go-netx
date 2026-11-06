@@ -25,11 +25,11 @@ type ReaderOptions struct {
     IdleSize int // buffer kept while idle; default 512
     Max      int // most bytes ever buffered (largest frame); default buf.Large
 }
-func (*Reader) Peek(n int) ([]byte, error) // borrowed; reads until n bytes or error
+func (*Reader) Peek(n int) ([]byte, error) // borrowed; reads until n bytes or error; n < 0: ErrNegativeCount
 func (*Reader) Fill() error                // one more read, growing if full
 func (*Reader) Buffered() []byte           // borrowed
 func (*Reader) Len() int
-func (*Reader) Discard(n int) int
+func (*Reader) Discard(n int) int          // n <= 0 consumes nothing
 func (*Reader) Read(p []byte) (int, error) // io.Reader
 func (*Reader) Release()
 var ErrTooLarge, ErrNoBuffer, ErrReleased
@@ -115,7 +115,7 @@ runs; here the handler reads for itself and one contiguous buffer suffices.
 
 ## 8. Testing
 
-STREAM-01…STREAM-16, NF-20 (fuzz) in [docs/TESTING.md](../TESTING.md).
+STREAM-01…STREAM-17, NF-20 (fuzz) in [docs/TESTING.md](../TESTING.md).
 
 ## 9. Open items
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math"
 	"testing"
 
 	"github.com/ninepeach/go-netx/buf"
@@ -260,4 +261,36 @@ func TestEmptyReadsDoNotSpin(t *testing.T) {
 		t.Fatalf("Peek after 99 empty reads: %q, %v", b, err)
 	}
 	r.Release()
+}
+
+// Checks: STREAM-17
+func TestNegativeCounts(t *testing.T) {
+	r := NewReader(bytes.NewReader([]byte("hello world")), buf.NewPool(nil), ReaderOptions{})
+	defer r.Release()
+	if b, err := r.Peek(-1); !errors.Is(err, ErrNegativeCount) || b != nil {
+		t.Fatalf("Peek(-1) = %q, %v; want ErrNegativeCount", b, err)
+	}
+	if b, err := r.Peek(5); err != nil || string(b) != "hello" {
+		t.Fatalf("Peek(5) = %q, %v", b, err)
+	}
+	r.Discard(2)
+	before := string(r.Buffered())
+	for _, n := range []int{-1, -10, math.MinInt + 1, 0} {
+		if got := r.Discard(n); got != 0 {
+			t.Fatalf("Discard(%d) = %d, want 0", n, got)
+		}
+		if b, err := r.Peek(n - 1); !errors.Is(err, ErrNegativeCount) || b != nil {
+			t.Fatalf("Peek(%d) = %q, %v; want ErrNegativeCount", n-1, b, err)
+		}
+		if got := string(r.Buffered()); got != before || r.Len() != len(before) {
+			t.Fatalf("after Discard(%d): buffered %q (Len %d), want %q", n, got, r.Len(), before)
+		}
+	}
+	// The reader still works normally afterwards.
+	if b, err := r.Peek(9); err != nil || string(b) != "llo world" {
+		t.Fatalf("Peek(9) = %q, %v", b, err)
+	}
+	if r.Discard(9) != 9 || r.Len() != 0 {
+		t.Fatal("Discard after negative calls")
+	}
 }
