@@ -35,6 +35,9 @@
 
 ### Changed
 
+- netx: `Server.OnError` is also called when `OnStart` fails, and a panic
+  in `OnError` is recovered and appended to the returned error instead of
+  crashing `LoopContext`.
 - stream: `Reader.Peek` with a negative count returns the new
   `ErrNegativeCount` instead of panicking, and `Discard` with a count of 0
   or less consumes nothing; before, a negative `Discard` moved the read

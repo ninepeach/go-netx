@@ -380,6 +380,8 @@ go run ./internal/tools/testdoc      # 只检查，不修改
 | RUN-14 | P1 | `Group`：Shutdown 并发进行，错误合并返回 | ✅ | `netx.GroupShutdownJoinsErrors`<br>`netx.GroupWithRealTransports` |  |
 | RUN-15 | P2 | 连续收到多次信号不会死锁 | ✅ | `netx.ConcurrentStopAndShutdown`<br>`netx.RepeatedSignalsDoNotDeadlock` | 仅 unix；信号之间留出间隔，避免内核合并同类信号 |
 | RUN-16 | P2 | 停止后后台 goroutine 全部退出 | ✅ | `netx.StopReleasesGoroutinesAndSockets` | 用 internal/leak 检查 goroutine 和文件描述符 |
+| RUN-17 | P1 | `OnError` 在每条退出路径上都恰好调用一次，包括 OnStart 失败；收到的错误与返回值相同，含 OnStart、Shutdown、OnStop 的全部错误；没有错误时不调用 | ✅ | `netx.OnErrorReceivesFinalErrorOnEveryPath` |  |
+| RUN-18 | P1 | `OnError` 自身 panic 时被 recover：LoopContext 不 panic，原始错误仍可用 `errors.Is` 找到，panic 追加在后面 | ✅ | `netx.OnErrorPanicIsRecovered` |  |
 
 ## 11. 集成测试
 
@@ -426,6 +428,8 @@ Review 中发现的问题都要登记在这里，并对应到一个测试 ID。�
 | REG-23 | stream | `Peek(-1)` 切片越界 panic；`Discard(-1)` 让读位置倒退，之后 `Buffered()` panic | STREAM-17 | ✅ |
 | REG-24 | socket | `SetBuffers(nil, …)` 在缓冲区为 0 时返回 nil，大于 0 时 panic；typed nil 连接同样 panic | SOCK-30 | ✅ |
 | REG-25 | socket | macOS FastOpen 测试无条件要求 `TCP_FASTOPEN` 非零，内核关闭 Fast Open 时，即使降级行为正确也会失败 | SOCK-26 | ✅ |
+| REG-26 | runtime | OnStart 失败的退出路径不调用 `OnError`，与“接收最终错误”的约定不一致 | RUN-17 | ✅ |
+| REG-27 | runtime | `OnError` 没有经过 `protect`，它 panic 时 LoopContext 直接 panic | RUN-18 | ✅ |
 
 ### 设计决定
 
