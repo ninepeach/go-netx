@@ -14,9 +14,11 @@ Design documents describe the target contract. A documented capability is not a 
 | [tcp](tcp.md) | reusable TCP server contract | Implemented; macOS unit/race/vet gate passed |
 | [udp](udp.md) | Datagram and peer adapter contracts | Packet read/write, native batching, Bind and peer address translation implemented |
 | [socket](socket.md) | control hook contract | Platform control hooks implemented |
-| [limit](limit.md) | **Deferred; excluded from V1** | Historical proposal only; no core package |
-| [queue](queue.md) | **Deferred; queue.Ring excluded from V1** | Historical proposal only; synchronous stream transfer uses natural backpressure |
-| [flow](flow.md) | out of core scope (archived draft) | No core package planned; flow/session lifecycle belongs to applications |
+| [limit](archive/limit.md) | **Deferred; excluded from V1** | Historical proposal only; no core package |
+| [queue](archive/queue.md) | **Deferred; queue.Ring excluded from V1** | Historical proposal only; synchronous stream transfer uses natural backpressure |
+| [flow](archive/flow.md) | out of core scope (archived draft) | No core package planned; flow/session lifecycle belongs to applications |
+
+The `limit`, `queue`, and `flow` documents are preserved under [`archive/`](archive/) as non-normative historical proposals, not active module specifications.
 
 ## Core package boundaries
 
