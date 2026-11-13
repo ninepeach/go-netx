@@ -66,19 +66,27 @@ func CopyPackets(dst bufio.PacketWriter, src bufio.PacketReader, target netip.Ad
 	if !target.IsValid() {
 		return 0, ErrInvalidTarget
 	}
+	// Scratch must be empty on entry. Clean every slot after a batch read,
+	// including when a broken reader reports an invalid count or fills
+	// slots outside its reported count.
+	for _, p := range scratch {
+		if p.Buffer != nil {
+			return 0, bufio.ErrInvalidCount
+		}
+	}
+	defer func() {
+		for i := range scratch {
+			if scratch[i].Buffer != nil {
+				scratch[i].Buffer.Release()
+			}
+			scratch[i] = bufio.Packet{}
+		}
+	}()
 	n, readErr := br.ReadBatch(scratch)
 	if n < 0 || n > len(scratch) {
 		return 0, bufio.ErrInvalidCount
 	}
 	batch := scratch[:n]
-	defer func() {
-		for i := range batch {
-			if batch[i].Buffer != nil {
-				batch[i].Buffer.Release()
-			}
-			batch[i] = bufio.Packet{}
-		}
-	}()
 	for i := range batch {
 		if batch[i].Buffer == nil {
 			return 0, ErrInvalidPacket
