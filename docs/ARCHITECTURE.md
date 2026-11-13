@@ -2,7 +2,7 @@
 
 ## Goal
 
-Reusable Go networking primitives for IM, game and media gateways and Ferry. The library provides owned memory buffers, buffered/extended network I/O, efficient stream and packet transfer, socket configuration, endpoint address values, transport primitives and optional native traffic/buffer statistics. Application framing, authentication, routing decisions and user sessions remain with callers.
+Reusable Go networking primitives for IM, game and media gateways and Ferry. The library provides owned memory buffers, buffered/extended network I/O, efficient stream and packet transfer, socket configuration, endpoint address values, transport primitives and existing native counters. Application framing, authentication, routing decisions and user sessions remain with callers.
 
 ## Principles
 
@@ -13,7 +13,7 @@ Reusable Go networking primitives for IM, game and media gateways and Ferry. The
 | P3 | Module boundaries | Memory, network I/O, socket setup, transports and policy have separate responsibilities. |
 | P4 | Complete transport capability | Stream and packet I/O, copy sessions, batching, zero-copy and connection adapters are defined as coherent capabilities, with safe fallbacks. |
 | P5 | Measured performance | Optimized paths require correctness tests and benchmarks against fallback paths. |
-| P6 | Accountable statistics | Native traffic and pooled-memory accounting has explicit boundaries, optional overhead and no duplicate counting. |
+| P6 | Accurate counters | Existing counters must retain documented accounting boundaries without double counting. |
 
 ## Layering
 
@@ -103,23 +103,23 @@ Half-close differs from full close. Read/write deadlines are independent. APIs a
 
 A fast path may be disabled or unsupported without changing byte order, packet boundaries, address metadata, ownership or counters. Unsupported optimizations fall back; semantic errors propagate. After partial success, only confirmed unsent data may be sent again. Routing/interface-binding requirements that affect traffic destination fail rather than silently falling back.
 
-### Statistics
+### Existing counters
 
-Native counters and snapshots belong to their owning modules: `buf` tracks pooled-buffer allocation/reuse and outstanding capacity; `bufio` may expose instrumented I/O; `transfer` counts confirmed forwarded bytes and optimized-path outcomes; `udp` counts datagrams and payload bytes; `socket` may count configuration failures. These are distinct accounting boundaries and must not be summed into one traffic total. Statistics are optional and must not impose per-I/O atomic operations when disabled. Process heap/RSS, runtime metrics, event subscription, dashboards and telemetry exporters belong to applications. See [statistics design](design/statistics.md).
+Counters already implemented by individual packages remain part of those packages. They must accurately describe their accounting boundaries and must not be summed across layers as total traffic. No standalone statistics module, exporter or unified instrumentation framework is planned.
 
 ## Decisions
 
 | | Decision |
 |---|---|
-| D1 | `buf.Get` has no built-in memory budget; resource admission belongs to callers. A standalone `limit` package is deferred until justified by concrete usage. |
+| D1 | `buf.Get` has no built-in memory budget; resource admission belongs to callers. No standalone admission-limit package is part of go-netx. |
 | D2 | Failed buffered stream writes release queued owned buffers and do not implicitly retain unsent data for retry. |
 | D3 | `bufio` owns I/O capability contracts and adapters; top-level `transfer` exclusively owns copy orchestration for stream and packet. `udp` owns datagram transport, Bind and peer address translation adapters; it owns no copy engine and no association table. |
 | D4 | Module design specifies intended contracts; implementation status is tracked separately in `design/README.md`. |
 | D5 | No `buf.Reserve` or `OverCap`; protocol layers allocate explicit headroom and capacity. |
-| D6 | No core `queue` or `flow` package. Stream transfer uses synchronous copying and natural backpressure; application-level queues and session registries remain with callers. Existing draft documents are retained as deferred historical proposals, not implementation commitments. |
+| D6 | No core `queue` or `flow` package. Stream transfer uses synchronous copying and natural backpressure; application-level queues and session registries remain with callers. No corresponding module or design draft is maintained. |
 | D7 | `tcp` provides reusable server lifecycle but no dialer or relay. `socket` configures sockets and `transfer` remains the only copy orchestrator. |
 | D8 | Add a lightweight `metadata.Endpoint` for IP/domain + port. Keep unresolved domains distinct from concrete socket peers; no DNS resolution, generic application metadata or new `network` package. Preserve `udp.Packet.Addr netip.AddrPort` in V1. |
-| D9 | Provide optional native network and pooled-buffer statistics in existing modules, with defined accounting boundaries, concurrency-safe snapshots and measured overhead. No core `observe`/`observable` package; generic server observability remains application-owned. |
+| D9 | Preserve existing native counters and their documented semantics; application observability remains application-owned. No unified statistics module is planned. |
 
 ## Module specifications
 
@@ -127,12 +127,11 @@ Native counters and snapshots belong to their owning modules: `buf` tracks poole
 - [bufio](design/bufio.md)
 - [transfer](design/transfer.md)
 - [metadata](design/metadata.md)
-- [statistics](design/statistics.md)
 - [Module status](design/README.md)
 
 ## Scope exclusions and deferred designs
 
-`queue.Ring`, `limit`, `pipe`, `observable`, `memory`, and a standalone `lifecycle` package are **not V1 packages**. `queue` and `flow` are **outside the core architecture**; their draft documents are retained for reference only. `limit` is **deferred**, not a prerequisite for `buf`, `bufio` or `transfer`. Do not add a queue between ordinary stream readers and writers: blocking writes provide backpressure. A UDP batch is a bounded operation, not a requirement for a general asynchronous queue. Application framing, session tracking, routing and admission policy belong to consumers unless a demonstrated reusable primitive warrants reconsideration.
+`queue`, `flow`, `limit`, `pipe`, `observable`, `memory`, `statistics`, and a standalone `lifecycle` package are **not core packages**. Do not add a queue between ordinary stream readers and writers: blocking writes provide backpressure. A UDP batch is a bounded operation, not a requirement for a general asynchronous queue. Application framing, session tracking, routing and admission policy belong to consumers unless a demonstrated reusable primitive warrants reconsideration.
 
 ## Target package boundaries and migration
 
