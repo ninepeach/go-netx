@@ -169,8 +169,6 @@ func (c *CachedConn) CloseWrite() error { return closeWrite(c.Conn) }
 
 // CloseRead closes the underlying read direction and drops the prefix on success.
 func (c *CachedConn) CloseRead() error {
-	c.readMu.Lock()
-	defer c.readMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	err := closeRead(c.Conn)
