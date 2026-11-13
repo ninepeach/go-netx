@@ -40,7 +40,7 @@ func (c *BoundPacketConn) Read(p []byte) (int, error) {
 
 // Write sends p as one datagram.
 func (c *BoundPacketConn) Write(p []byte) (int, error) {
-	b := buf.As(p)
+	b := buf.Wrap(p)
 	defer b.Release()
 	if err := c.WritePacket(Packet{Buffer: b}); err != nil {
 		return 0, err
