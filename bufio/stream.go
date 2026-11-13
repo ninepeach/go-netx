@@ -86,7 +86,7 @@ func ReadBuffer(r io.Reader, size int) (*buf.Buf, error) {
 	var err error
 	if extended, ok := r.(ExtendedReader); ok {
 		n, err = extended.ReadBuffer(b)
-		if n != b.Len() {
+		if n < 0 || n > size || n != b.Len() {
 			err = ErrInvalidCount
 			n = 0
 		}
@@ -110,6 +110,7 @@ func ReadBuffer(r io.Reader, size int) (*buf.Buf, error) {
 type CachedConn struct {
 	net.Conn
 	mu       sync.Mutex
+	readMu   sync.Mutex // serializes Read, ReadBuffer and WriteTo
 	prefix   *buf.Buf
 	closed   bool
 	once     sync.Once
@@ -122,6 +123,8 @@ func NewCachedConn(c net.Conn, prefix *buf.Buf) *CachedConn {
 }
 
 func (c *CachedConn) Read(p []byte) (int, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -166,6 +169,8 @@ func (c *CachedConn) CloseWrite() error { return closeWrite(c.Conn) }
 
 // CloseRead closes the underlying read direction and drops the prefix on success.
 func (c *CachedConn) CloseRead() error {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	err := closeRead(c.Conn)
@@ -202,6 +207,8 @@ func closeRead(c net.Conn) error {
 // WriteTo forwards the prefix before copying from the connection. Serialize
 // it with other reads. A failed prefix write releases its unsent remainder.
 func (c *CachedConn) WriteTo(dst io.Writer) (int64, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
