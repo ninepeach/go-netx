@@ -42,26 +42,25 @@ An arrow means the upper or left package imports the lower one. `bufio` provides
 | `bufio` | I/O capabilities, interfaces, buffer adapters, optimizations | Copy flow, forwarding policy, session management | May depend on `buf`; never on `transfer` |
 | `transfer` | Composing readers and writers, two-way forwarding, packet copy, half-close | Socket creation, concrete TCP or UDP, routing | May depend on `bufio` and `buf` |
 | `tcp` | Generic TCP listener, admission, tracking and shutdown | Protocol sessions, relay, process policy | May depend on `socket` |
-| `lifecycle` (proposed, not implemented) | Potential concurrent service composition | Signals, timeout policy, restart | Go standard library |
 | `udp` | Datagram I/O, batch I/O, socket adapters, peer address translation | NAT association tables, session managers, routing engines | May use `buf` and `bufio`; never `transfer` |
 
 ### Lifecycle and services
 
-go-netx provides network primitives and a small protocol-neutral service
-lifecycle extracted for Ferry and future application servers. Every primitive
-has an explicit ownership, cancellation, close, error and release contract.
+go-netx provides network primitives with explicit ownership, cancellation,
+close, error and release contracts. Cross-service lifecycle orchestration
+belongs to applications.
 
 | Layer | Manages | Belongs to |
 |---|---|---|
 | Resource | Buffer, socket, packet; `Close` and `Release` | The package that defines it |
 | Operation | Copy, cancel, half-close, joining its own goroutines, error propagation | `transfer` |
-| Service | Generic TCP accept, tracking, drain/abort and service grouping | `tcp` (service grouping remains application-owned) |
+| Service | Generic TCP accept, tracking and drain/abort | `tcp`; cross-service grouping belongs to applications |
 
 An operation such as `transfer.CopyConn` cancels, stops both directions and waits for its own work to end. It does not stop a server, handle signals, restart, or know about other connections.
 
 The `tcp` package owns only generic listener acceptance, bounded admission,
-connection identity/tracking and Stop Accept → Drain → Abort. `lifecycle.Group`
-runs and shuts down independent services together. Protocol framing,
+connection identity/tracking and Stop Accept → Drain → Abort. Applications
+compose and shut down independent services. Protocol framing,
 authentication, routing, process signals, health checks, logger selection and
 shutdown timeout policy remain in applications.
 
@@ -79,13 +78,12 @@ A plain TCP proxy composes `net` and `transfer`. A UDP gateway composes `udp`, `
 | `metadata` | Lightweight endpoint address values: IP or unresolved domain plus port; parsing and explicit conversion, no DNS or routing |
 | `socket` | Socket options and platform capability configuration |
 | `tcp` | TCP accept loop, bounded admission, connection identity and drain/abort lifecycle |
-| `lifecycle` | Concurrent Serve/Shutdown composition for protocol-neutral services |
 | `udp` | Datagram transport and socket-level packet behavior; connected/unconnected Bind and single-peer NAT address adapters. Association tables are not implemented |
 
 
 ## Dependencies
 
-`metadata → Go standard library` only; `bufio → buf`; `transfer → bufio/buf`; `udp → bufio/buf/metadata` only where required; `tcp → socket`; A future `lifecycle` package, if justified, would depend on the Go standard library only; it is not part of the current tree. `socket` provides low-level platform socket configuration, not transport orchestration. **Neither `bufio` nor `udp` imports `transfer`; `transfer` does not import concrete `tcp`/`udp` implementations.** Higher-level callers compose transports with transfer. `buf` has no internal module dependency. TCP and UDP need not have symmetric package structures. No dependency cycles. Platform-specific implementations live behind build tags or internal helpers; shared capability interfaces stay platform-neutral. External dependencies require explicit review.
+`metadata → Go standard library` only; `bufio → buf`; `transfer → bufio/buf`; `udp → bufio/buf/metadata` only where required; `tcp → socket`; `socket` provides low-level platform socket configuration, not transport orchestration. **Neither `bufio` nor `udp` imports `transfer`; `transfer` does not import concrete `tcp`/`udp` implementations.** Higher-level callers compose transports with transfer. `buf` has no internal module dependency. TCP and UDP need not have symmetric package structures. No dependency cycles. Platform-specific implementations live behind build tags or internal helpers; shared capability interfaces stay platform-neutral. External dependencies require explicit review.
 
 ## Cross-module contracts
 
@@ -134,7 +132,7 @@ Native counters and snapshots belong to their owning modules: `buf` tracks poole
 
 ## Scope exclusions and deferred designs
 
-`queue.Ring`, `limit`, `pipe`, `observable`, and `memory` are **not V1 packages**. `queue` and `flow` are **outside the core architecture**; their draft documents are retained for reference only. `limit` is **deferred**, not a prerequisite for `buf`, `bufio` or `transfer`. Do not add a queue between ordinary stream readers and writers: blocking writes provide backpressure. A UDP batch is a bounded operation, not a requirement for a general asynchronous queue. Application framing, session tracking, routing and admission policy belong to consumers unless a demonstrated reusable primitive warrants reconsideration.
+`queue.Ring`, `limit`, `pipe`, `observable`, `memory`, and a standalone `lifecycle` package are **not V1 packages**. `queue` and `flow` are **outside the core architecture**; their draft documents are retained for reference only. `limit` is **deferred**, not a prerequisite for `buf`, `bufio` or `transfer`. Do not add a queue between ordinary stream readers and writers: blocking writes provide backpressure. A UDP batch is a bounded operation, not a requirement for a general asynchronous queue. Application framing, session tracking, routing and admission policy belong to consumers unless a demonstrated reusable primitive warrants reconsideration.
 
 ## Target package boundaries and migration
 
