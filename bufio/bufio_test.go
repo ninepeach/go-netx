@@ -113,70 +113,91 @@ func TestFillReadsOnce(t *testing.T) {
 }
 
 func TestNoProgress(t *testing.T) {
+	// Peek retries empty reads and eventually reports a sticky no-progress
+	// error. A new Reader is required after that terminal error.
 	src := &script{}
 	r := NewReader(src, ReaderOptions{})
 	defer r.Release()
 	if _, err := r.Peek(1); err != io.ErrNoProgress || src.calls != maxEmptyReads {
 		t.Fatalf("Peek = %v after %d reads", err, src.calls)
 	}
-	// The count runs across Fill, Peek and Read, and data resets it.
-	for i := 0; i < maxEmptyReads-2; i++ {
-		if err := r.Fill(); err != nil {
+	if err := r.Fill(); err != io.ErrNoProgress || src.calls != maxEmptyReads {
+		t.Fatalf("sticky Fill = %v after %d reads", err, src.calls)
+	}
+	if n, err := r.Read(make([]byte, 600)); n != 0 || err != io.ErrNoProgress || src.calls != maxEmptyReads {
+		t.Fatalf("sticky Read = %d, %v after %d reads", n, err, src.calls)
+	}
+
+	// Fill reads once per call; its empty-read count is shared with Read.
+	src = &script{}
+	r2 := NewReader(src, ReaderOptions{})
+	defer r2.Release()
+	for i := 0; i < maxEmptyReads-1; i++ {
+		if err := r2.Fill(); err != nil {
 			t.Fatalf("Fill %d: %v", i, err)
 		}
 	}
-	if n, err := r.Read(make([]byte, 600)); n != 0 || err != nil { // direct read, 99th
-		t.Fatalf("Read = %d, %v", n, err)
+	if n, err := r2.Read(make([]byte, 600)); n != 0 || err != io.ErrNoProgress {
+		t.Fatalf("100th empty read = %d, %v", n, err)
 	}
-	if _, err := r.Peek(1); err != io.ErrNoProgress {
-		t.Fatalf("Peek = %v, want the 100th empty read to fail", err)
-	}
+
+	// Actual data resets the consecutive-empty count.
+	src = &script{}
+	r3 := NewReader(src, ReaderOptions{})
+	defer r3.Release()
 	for i := 0; i < maxEmptyReads-1; i++ {
-		r.Fill()
+		if err := r3.Fill(); err != nil {
+			t.Fatalf("pre-data Fill %d: %v", i, err)
+		}
 	}
 	src.steps = []step{{"x", nil}}
-	if err := r.Fill(); err != nil || r.Len() != 1 {
-		t.Fatalf("Fill = %v", err)
+	if err := r3.Fill(); err != nil || r3.Len() != 1 {
+		t.Fatalf("Fill with data = %v, len %d", err, r3.Len())
 	}
-	if err := r.Fill(); err != nil { // would be the 100th had data not reset the count
+	if err := r3.Fill(); err != nil {
 		t.Fatalf("Fill after data = %v", err)
 	}
 }
 
-// Empty reads, then data, then empty reads: only the run after the data
-// counts, on the buffered path and on the direct one, and also when the
-// data arrives together with an error.
+// Empty reads followed by data reset the no-progress count on both
+// buffered and direct paths. Read retries empty reads internally.
 func TestEmptyReadCountResets(t *testing.T) {
 	for _, direct := range []bool{false, true} {
 		src := &script{}
 		r := NewReader(src, ReaderOptions{})
 		size := 1
 		if direct {
-			size = 600 // at least IdleSize: read straight from the source
+			size = 600
 		}
 		p := make([]byte, size)
-		read := func(want int, wantErr error) {
-			t.Helper()
-			if n, err := r.Read(p); n != want || err != wantErr {
-				t.Fatalf("direct %v: Read = %d, %v; want %d, %v", direct, n, err, want, wantErr)
+		for i := 0; i < maxEmptyReads-1; i++ {
+			if err := r.Fill(); err != nil {
+				t.Fatalf("direct %v: Fill %d = %v", direct, i, err)
 			}
 		}
-		for i := 0; i < maxEmptyReads-1; i++ {
-			read(0, nil)
-		}
 		src.steps = []step{{"x", nil}}
-		read(1, nil)
-		for i := 0; i < maxEmptyReads-1; i++ {
-			read(0, nil) // the 99 before the data no longer count
+		if n, err := r.Read(p); n != 1 || err != nil || p[0] != 'x' {
+			t.Fatalf("direct %v: data Read = %d, %v", direct, n, err)
 		}
-		read(0, io.ErrNoProgress)
+		for i := 0; i < maxEmptyReads-1; i++ {
+			if err := r.Fill(); err != nil {
+				t.Fatalf("direct %v: post-data Fill %d = %v", direct, i, err)
+			}
+		}
+		if n, err := r.Read(p); n != 0 || err != io.ErrNoProgress {
+			t.Fatalf("direct %v: 100th empty Read = %d, %v", direct, n, err)
+		}
+		r.Release()
 
-		for i := 0; i < maxEmptyReads-1; i++ {
-			read(0, nil)
+		// Data accompanied by EOF must be delivered before the sticky EOF.
+		src = &script{steps: []step{{"y", io.EOF}}}
+		r = NewReader(src, ReaderOptions{})
+		if n, err := r.Read(p); n != 1 || err != nil || p[0] != 'y' {
+			t.Fatalf("direct %v: data+EOF = %d, %v", direct, n, err)
 		}
-		src.steps = []step{{"y", io.EOF}}
-		read(1, nil)
-		read(0, io.EOF) // the sticky error, not io.ErrNoProgress
+		if n, err := r.Read(p); n != 0 || err != io.EOF {
+			t.Fatalf("direct %v: sticky EOF = %d, %v", direct, n, err)
+		}
 		r.Release()
 	}
 }
