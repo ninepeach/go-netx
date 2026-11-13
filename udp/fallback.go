@@ -54,7 +54,7 @@ func (c *fallbackPacketConn) WriteTo(p []byte, dst net.Addr) (int, error) {
 			}
 		}
 	}
-	b := buf.As(p)
+	b := buf.Wrap(p)
 	defer b.Release()
 	if err := c.WritePacket(Packet{Buffer: b, Addr: target}); err != nil {
 		return 0, err

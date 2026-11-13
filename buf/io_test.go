@@ -76,7 +76,7 @@ func TestExternalAndRelease(t *testing.T) {
 	for _, wrap := range []struct {
 		makeBuf func([]byte) *Buf
 		length  int
-	}{{As, 3}, {With, 0}} {
+	}{{Wrap, 3}, {WrapWritable, 0}} {
 		b := wrap.makeBuf(data[:3])
 		if b.Len() != wrap.length || b.Cap() != 3 || cap(b.Bytes()) != wrap.length || cap(b.FreeBytes()) != 3-wrap.length {
 			t.Fatal("incorrect external bounds")

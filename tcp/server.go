@@ -43,7 +43,7 @@ type Conn struct {
 	net.Conn
 	id        uint64
 	closeOnce sync.Once
-	closeErr error
+	closeErr  error
 	server    *Server
 	ip        netip.Addr
 	countedIP bool
