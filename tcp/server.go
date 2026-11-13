@@ -130,6 +130,13 @@ func (s *Server) Addr() net.Addr { return s.listener.Addr() }
 // Draining closes when Shutdown or Close stops acceptance.
 func (s *Server) Draining() <-chan struct{} { return s.draining }
 
+func (s *Server) Ready() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.serving && !s.stopped
+}
+
 // Serve accepts until stopped and waits for all handlers.
 func (s *Server) Serve(parent context.Context) error {
 	s.mu.Lock()
