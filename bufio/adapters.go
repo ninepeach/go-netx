@@ -64,28 +64,28 @@ func (r *CachedReader) Close() error {
 // connection's lifetime and addresses. A nil direction uses c. Replacements
 // must honor c's deadlines and close if used with a cancelling transfer.
 func ComposeConn(c net.Conn, r io.Reader, w io.Writer) net.Conn {
-	return &appendConn{Conn: c, reader: r, writer: w}
+	return &composedConn{Conn: c, reader: r, writer: w}
 }
 
-type appendConn struct {
+type composedConn struct {
 	net.Conn
 	reader io.Reader
 	writer io.Writer
 }
 
-func (c *appendConn) Read(p []byte) (int, error) {
+func (c *composedConn) Read(p []byte) (int, error) {
 	if c.reader != nil {
 		return c.reader.Read(p)
 	}
 	return c.Conn.Read(p)
 }
-func (c *appendConn) Write(p []byte) (int, error) {
+func (c *composedConn) Write(p []byte) (int, error) {
 	if c.writer != nil {
 		return c.writer.Write(p)
 	}
 	return c.Conn.Write(p)
 }
-func (c *appendConn) CloseWrite() error {
+func (c *composedConn) CloseWrite() error {
 	if c.writer == nil {
 		return closeWrite(c.Conn)
 	}
@@ -94,7 +94,7 @@ func (c *appendConn) CloseWrite() error {
 	}
 	return errors.ErrUnsupported
 }
-func (c *appendConn) CloseRead() error {
+func (c *composedConn) CloseRead() error {
 	if c.reader == nil {
 		return closeRead(c.Conn)
 	}
